@@ -1407,7 +1407,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Do not multi buffer tmem as uses are scheduled before defs
     // CHECK: ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
     // CHECK: ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
-    // CHECK: scf.for
+    // CHECK: scf.for %[[IV:[^ ]+]] =
+    // CHECK: arith.remui %[[IV]], %c4_i32 {{.*}}loop.stage = 0
+    // CHECK: arith.remui %[[IV]], %c4_i32 {{.*}}loop.stage = 2
     // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 4 : i32, loop.stage = 2 : i32}
     // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 2 : i32, loop.stage = 3 : i32}
     // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 3 : i32, loop.stage = 3 : i32}
@@ -2311,5 +2313,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1, %res_tok = ttng.tmem_load %0[%last_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     %2 = arith.truncf %1 : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
     tt.return %2 : tensor<128x128xf16, #blocked>
+  }
+}
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // No shared operand pipeline supplies back-pressure for completion-slot reuse.
+  // CHECK-LABEL: @two_cta_mma_without_operand_pipeline
+  // CHECK: scf.for
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK: tt.return
+  tt.func @two_cta_mma_without_operand_pipeline(%a: !ttg.memdesc<256x64xf16, #sharedA, #smem>, %b: !ttg.memdesc<64x128xf16, #sharedB, #smem>, %n: i32) -> tensor<256x128xf32, #blocked> {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blocked>
+    %acc = ttng.tmem_alloc %zero : (tensor<256x128xf32, #blocked>) -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    scf.for %i = %c0 to %n step %c1 : i32 {
+      ttng.tc_gen5_mma %a, %b, %acc, %true, %true {loop.cluster = 0 : i32, loop.stage = 0 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem>, !ttg.memdesc<64x128xf16, #sharedB, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    } {tt.scheduled_max_stage = 0 : i32}
+    %value = ttng.tmem_load %acc : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blocked>
+    tt.return %value : tensor<256x128xf32, #blocked>
   }
 }

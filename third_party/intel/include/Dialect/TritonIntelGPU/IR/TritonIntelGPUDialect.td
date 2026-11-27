@@ -173,6 +173,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.store_l1_write_back";
     }
 
+    /// Get the name of the attribute that lets bf16 -> f32 lower to `fpext`
+    /// instead of the conversion builtin (set for IGC >= 2.43).
+    static constexpr llvm::StringRef getUseBF16FPExtAttrName() {
+      return "ttig.use_bf16_fpext";
+    }
+
     /// Get the name of the attribute holding the core clock rate in kHz, used
     /// to convert cycles to nanoseconds.
     static constexpr llvm::StringRef getCoreClockRateAttrName() {

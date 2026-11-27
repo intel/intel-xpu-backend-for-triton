@@ -1,3 +1,4 @@
+from itertools import product
 import math
 import pytest
 import torch
@@ -276,49 +277,80 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
-@pytest.mark.parametrize("reset_period", [0, 2, 4])
-@pytest.mark.parametrize("reset_value", [0, 1])
-@pytest.mark.parametrize("snapshot", [False, True])
-def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot):
+@pytest.mark.parametrize(
+    "reset_period, reset_value, snapshot, store_after_loop",
+    [(period, value, snapshot, store_after_loop)
+     for period, value in [(0, 0), (2, 0), (2, 1), (4, 0), (4, 1)]
+     for snapshot, store_after_loop in product(["even", "last"], [False, True])] +
+    [(2, 0, snapshot, False) for snapshot in ("before_dot", "after_reset", "next_iteration")],
+)
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot, store_after_loop):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr):
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr,
+               STORE_AFTER_LOOP: tl.constexpr):
         acc = tl.zeros((256, 16), tl.float32)
         for k in range(6):
             a = A.load([0, k * 128])
             b = B.load([k * 128, 0])
+            if SNAPSHOT == "before_dot":
+                if k > 0 and k % RESET_PERIOD == 0:
+                    acc = tl.full((256, 16), RESET_VALUE, tl.float32)
+            if SNAPSHOT == "before_dot" or SNAPSHOT == "next_iteration":
+                C.store([k * 256, 0], acc)
+
             acc = tl.dot(a, b, acc)
-            # Snapshots and resets use different conditions, so the reset must
-            # wait for the MMA even when no snapshot is taken.
-            if SNAPSHOT:
+            if SNAPSHOT == "even":
+                # The reset must wait for the MMA even on iterations without a snapshot.
                 if k % 2 == 0:
                     C.store([(k // 2) * 256, 0], acc)
-            elif k == 5:
-                # Observe accumulation before the last reset, without taking
-                # intermediate snapshots or reading the post-loop reset value.
-                C.store([0, 0], acc)
-            if RESET_PERIOD:
+            elif SNAPSHOT == "last":
+                # Observe the last accumulation before its potential reset.
+                if k == 5:
+                    C.store([0, 0], acc)
+            if RESET_PERIOD and SNAPSHOT != "before_dot":
                 if k % RESET_PERIOD == RESET_PERIOD - 1:
                     acc = tl.full((256, 16), RESET_VALUE, tl.float32)
+            if SNAPSHOT == "after_reset":
+                C.store([k * 256, 0], acc)
+        if STORE_AFTER_LOOP:
+            # A reset on the last iteration must also reach post-loop users.
+            C.store([(3 if SNAPSHOT == "even" else 1) * 256, 0], acc)
+
+    # Resetting between tiles gives the same input to the next dot whether
+    # the reset runs at the end of one iteration or the start of the next.
+    before_dot, after_dot, after_reset = [], [], []
+    value = 0
+    for k in range(6):
+        before_dot.append(value)
+        value += 128
+        after_dot.append(value)
+        if reset_period and (k + 1) % reset_period == 0:
+            value = reset_value
+        after_reset.append(value)
+    values = {
+        "even": after_dot[::2],
+        "last": after_dot[-1:],
+        "before_dot": before_dot,
+        "after_reset": after_reset,
+        "next_iteration": before_dot,
+    }[snapshot]
+    if store_after_loop:
+        values.append(value)
 
     a = torch.ones((256, 768), device=device, dtype=torch.float16)
     b = torch.ones((768, 16), device=device, dtype=torch.float16)
-    c = torch.empty(((3 if snapshot else 1) * 256, 16), device=device, dtype=torch.float32)
+    c = torch.empty((len(values) * 256, 16), device=device, dtype=torch.float32)
     a_desc = TensorDescriptor.from_tensor(a, [256, 128])
     b_desc = TensorDescriptor.from_tensor(b, [128, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, num_stages=3, num_warps=4)
+    num_stages = 3 if snapshot in ("even", "last") else 2
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, store_after_loop,
+                             num_stages=num_stages, num_warps=4)
     if is_compile_warmup():
         return
     assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
-
-    values = {
-        0: [128, 384, 640, 768],
-        2: [128, 128 + reset_value, 128 + reset_value, 256 + reset_value],
-        4: [128, 384, 128 + reset_value, 256 + reset_value],
-    }[reset_period]
-    values = values[:3] if snapshot else values[-1:]
     expected = torch.tensor(values, device=device, dtype=torch.float32)
     expected = expected[:, None, None].expand(len(values), 256, 16).reshape_as(c)
     torch.testing.assert_close(c, expected, atol=0, rtol=0)
@@ -414,6 +446,51 @@ def test_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
         return
     assert marker.tolist() == [-1, -1, -1]
     assert torch.all(c == 0)
+
+
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tma_matmul_two_ctas_lagging_peer(num_ctas, device):
+    # With operands loaded before the loop, a lagging peer must observe MMA
+    # completion before the leader reuses its completion-barrier slot.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit(do_not_specialize=["iterations"])
+    def kernel(A, B, C, chain, final_index, iterations, CHAIN_SIZE: tl.constexpr, CHASE_STEPS: tl.constexpr):
+        a = A.load([0, 0])
+        b = B.load([0, 0])
+        acc = tl.zeros((256, 16), tl.float32)
+        rows = tl.arange(0, 256)
+        peer_rows = rows >= 128
+        index = rows * 1024
+        for _ in range(iterations):
+            acc = tl.dot(a, b, acc)
+            for _ in tl.static_range(CHASE_STEPS):
+                index = tl.load(chain + (index & (CHAIN_SIZE - 1)), peer_rows, other=0, cache_modifier=".cg")
+        C.store([0, 0], acc)
+        tl.store(final_index + rows, index)
+
+    iterations, steps, chain_size = 8, 8, 1 << 18
+    a = torch.ones((256, 16), device=device, dtype=torch.float16)
+    b = torch.ones((16, 16), device=device, dtype=torch.float16)
+    c = torch.full((256, 16), -1.0, device=device, dtype=torch.float32)
+    final_index = torch.full((256, ), -1, device=device, dtype=torch.int32)
+    chain = (torch.arange(chain_size, device=device, dtype=torch.int32) + 32) & (chain_size - 1)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 16])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, chain, final_index, iterations, CHAIN_SIZE=chain_size,
+                             CHASE_STEPS=steps, num_ctas=num_ctas, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert (f"tcgen05.mma.cta_group::{num_ctas}" in compiled.asm["ptx"])
+    assert compiled.asm["ttgir"].count("ttng.tc_gen5_mma") > 1
+    if num_ctas == 2:
+        assert "ttng.cluster_barrier" in compiled.asm["ttgir"]
+    torch.testing.assert_close(c, torch.full_like(c, 16.0 * iterations), atol=0, rtol=0)
+    rows = torch.arange(256, device=device, dtype=torch.int32)
+    expected_index = torch.where(rows >= 128, (rows * 1024 + 32 * iterations * steps) & (chain_size - 1), 0)
+    torch.testing.assert_close(final_index, expected_index, atol=0, rtol=0)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):

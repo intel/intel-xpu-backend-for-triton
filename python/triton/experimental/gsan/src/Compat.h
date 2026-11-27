@@ -16,6 +16,8 @@ namespace gsan {
 #ifdef _MSC_VER
 // MSVC does not provide GCC/Clang __SIZE_TYPE__ builtins.
 // Use MSVC built-in sized types directly (no headers needed).
+using int16_t = __int16;
+using int64_t = __int64;
 using uint8_t = unsigned __int8;
 using uint16_t = unsigned __int16;
 using uint32_t = unsigned __int32;

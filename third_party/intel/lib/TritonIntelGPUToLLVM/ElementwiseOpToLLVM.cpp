@@ -3,6 +3,7 @@
 #include "Utils/LLVMIntr.h"
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/MLIRContext.h"
 #include "third_party/intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
@@ -1628,6 +1629,22 @@ struct FpToFpOpConversion
       for (Value v : operands[0]) {
         outVals.push_back(
             convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+      }
+      return outVals;
+    }
+
+    // Every bf16 value is exact in f32, so truncating through f32 rounds once.
+    if (srcElementType.isF64() && dstElementType.isBF16() &&
+        roundingMode == RoundingMode::RTZ) {
+      MLIRContext *ctx = rewriter.getContext();
+      SmallVector<Value> outVals;
+      for (Value v : operands[0]) {
+        Value f32 = LLVM::ConstrainedFPTruncIntr::create(
+            rewriter, loc, f32_ty, v,
+            LLVM::RoundingModeAttr::get(ctx, LLVM::RoundingMode::TowardZero),
+            arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+        outVals.push_back(
+            intel::convertFp32ToBf16(loc, rewriter, f32, RoundingMode::RTZ));
       }
       return outVals;
     }

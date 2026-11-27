@@ -11,6 +11,7 @@
 
 #include "intel/lib/Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 

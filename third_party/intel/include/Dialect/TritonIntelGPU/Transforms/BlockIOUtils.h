@@ -50,8 +50,13 @@ struct BlockIOTileSizeInfo {
   }
 };
 
+/// Size the 2D block load tile for `ll`. When a non-transposed tile's row
+/// dimension is not fixed by the lanes, it is the dimension whose register
+/// bases give the tallest tile. \p innerRowDimOnly restricts that choice to the
+/// inner two dimensions, for descriptor loads, which can only tile those.
 BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &, unsigned,
-                                           unsigned, AxisInfo *, bool);
+                                           unsigned, AxisInfo *, bool,
+                                           bool innerRowDimOnly = false);
 BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &, unsigned,
                                                unsigned, AxisInfo *,
                                                bool allow256Bytes);
@@ -90,11 +95,13 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
 /// Validate that a load with the given encoding and element size can be
 /// lowered to 2D block I/O. Checks tile size, HW address restrictions,
 /// inner-dim constraints, and transpose shuffle mapping. Returns true if valid.
+/// \p innerRowDimOnly is as for getBlockIOLoadTileSize.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType,
                              bool oneMatrixPerLoadForBT = false,
-                             AxisInfo *maskAxisInfo = nullptr);
+                             AxisInfo *maskAxisInfo = nullptr,
+                             bool innerRowDimOnly = false);
 
 /// Validate that a store with the given encoding and element size can be
 /// lowered to 2D block I/O, applying the constraints the store lowering
@@ -296,7 +303,6 @@ struct StoreBoundaryClamp {
 /// bytes, at least 64, plus any base alignment compensation.
 StoreBoundaryClamp
 matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
-                        bool pitchDimIsBroadcast,
                         std::optional<int64_t> pitchBytes,
                         triton::intel::ModuleAxisInfoAnalysis &axisInfo);
 

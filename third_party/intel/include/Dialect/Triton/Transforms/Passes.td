@@ -18,7 +18,9 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
     rewritten load/store. Accesses the backend lowers directly from the descriptor can stay native instead, with their
     `tt.make_tensor_descriptor`: loads and stores on a descriptor the pass can trace to its definition, and gathers
     admitted by the native-gather rules, which later become `ttig.descriptor_gather`. With
-    TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 the pass rewrites every gather.
+    TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 the pass rewrites every gather. Scatters admitted by the
+    native-scatter rules stay native too and later become `ttig.descriptor_scatter`; with
+    TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_SCATTER=1 the pass rewrites every scatter.
   }];
   let options = [
     Option<"numWarps", "num-warps", "int32_t", /*default*/"4",

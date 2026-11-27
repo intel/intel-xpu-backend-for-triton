@@ -190,6 +190,9 @@ def _run(run_id, **overrides):
         "created_at": f"2026-10-0{run_id}T06:30:00Z",
         "updated_at": f"2026-10-0{run_id}T07:00:00Z",
         "head_branch": "main",
+        "head_repository": {
+            "full_name": "org/repo"
+        },
         "status": "completed",
         "conclusion": "success"
     } | overrides
@@ -237,6 +240,18 @@ def test_latest_success_run_picks_highest_run_number(monkeypatch):
     wf = GHAWorkflow(id="1", name="wf", repo="org/repo", path=".github/workflows/wf.yml", branch="main")
 
     assert wf.get_latest_success_run().id == 2
+
+
+def test_latest_success_run_skips_fork_runs(monkeypatch):
+    """A fork PR run from the fork's main reports head_branch main; only runs from this repository count."""
+    _fake_runs(
+        monkeypatch,
+        [_run(1), _run(3, head_repository={"full_name": "fork/repo"}),
+         _run(2, head_repository=None)]
+    )
+    wf = GHAWorkflow(id="1", name="wf", repo="org/repo", path=".github/workflows/wf.yml", branch="main")
+
+    assert wf.get_latest_success_run().id == 1
 
 
 def test_latest_success_run_raises_when_no_run_qualifies(monkeypatch):

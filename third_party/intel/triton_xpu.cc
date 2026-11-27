@@ -442,6 +442,17 @@ void init_triton_intel(py::module_ &m) {
   });
 
   // Also clears the attribute, so a stale one is never kept.
+  m.def("set_use_bf16_fpext", [](mlir::ModuleOp &mod, bool useFPExt) {
+    using namespace mlir::triton::gpu::intel;
+    constexpr llvm::StringRef name =
+        TritonIntelGPUDialect::getUseBF16FPExtAttrName();
+    if (!useFPExt)
+      mod->removeAttr(name);
+    else if (!mod->hasAttr(name))
+      mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
+  });
+
+  // Also clears the attribute, so a stale one is never kept.
   m.def("set_use_dp4a_integer_fma", [](mlir::ModuleOp &mod, bool useDp4a) {
     using namespace mlir::triton::gpu::intel;
     constexpr llvm::StringRef name =

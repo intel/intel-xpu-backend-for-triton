@@ -4,6 +4,7 @@
 // wherever ttig.support_bfloat16_conversion allows the scalar builtin, in full
 // groups of 8 only.
 
+#b1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b16 = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
@@ -92,6 +93,16 @@ module attributes {"ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32,
     tt.return %0 : tensor<256xbf16, #b16>
   }
 
+  // f64 -> bf16 RTZ truncates to f32 toward zero first.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fp_to_fp_f64_rtz(
+  // CHECK:         llvm.intr.experimental.constrained.fptrunc {{.*}} towardzero ignore : f64 to f32
+  // CHECK-NOT:     ConvertFToBF16INTEL
+  // CHECK:         llvm.return
+  tt.func @fp_to_fp_f64_rtz(%arg0: tensor<16xf64, #b1>) -> tensor<16xbf16, #b1> {
+    %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<16xf64, #b1> -> tensor<16xbf16, #b1>
+    tt.return %0 : tensor<16xbf16, #b1>
+  }
+
   // f64 keeps its round-to-odd step and the scalar call.
   // CHECK-LABEL: llvm.func spir_kernelcc @truncf_f64(
   // CHECK-NOT:     ConvertFToBF16INTELDv8_f
@@ -115,5 +126,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @truncf_no_support(%arg0: tensor<256xf32, #b16>) -> tensor<256xbf16, #b16> {
     %0 = arith.truncf %arg0 : tensor<256xf32, #b16> to tensor<256xbf16, #b16>
     tt.return %0 : tensor<256xbf16, #b16>
+  }
+}
+
+// -----
+
+// Native bf16 arithmetic on IGC >= 2.43: bf16 -> f32 is a plain fpext.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.support_bfloat16_arithmetic", "ttig.use_bf16_fpext", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_fpext(
+  // CHECK-NOT:     ConvertBF16ToFINTEL
+  // CHECK-COUNT-8: llvm.fpext %{{.*}} : bf16 to f32
+  // CHECK-NOT:     ConvertBF16ToFINTEL
+  // CHECK:         llvm.return
+  tt.func @extf_fpext(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
+  }
+}
+
+// -----
+
+// Native bf16 arithmetic on IGC < 2.43: bf16 -> f32 uses the builtin.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.support_bfloat16_arithmetic", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_old_igc(
+  // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
+  // CHECK-NOT:     llvm.fpext
+  // CHECK:         llvm.return
+  tt.func @extf_old_igc(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
+  }
+}
+
+// -----
+
+// No native bf16 arithmetic (LTS): bf16 -> f32 uses the builtin, even with
+// `ttig.use_bf16_fpext`, which an AOT compile takes from the `ocloc` version.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.use_bf16_fpext", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_lts(
+  // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
+  // CHECK-NOT:     llvm.fpext
+  // CHECK:         llvm.return
+  tt.func @extf_lts(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
   }
 }

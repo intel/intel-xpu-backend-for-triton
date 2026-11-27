@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -602,6 +603,14 @@ unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
   int64_t idxDiv = idxInfo ? idxInfo->getDivisibility(0) : 1;
   return std::min({pow2Divisor(descInfo->getContiguity(dim)), ptrAlign,
                    pow2Divisor(idxDiv)});
+}
+
+bool ModuleAxisInfoAnalysis::isDescriptorRow16ByteAligned(Value desc,
+                                                          Value yOffset,
+                                                          unsigned elemBits) {
+  constexpr unsigned kAlignBytes = 16;
+  return getDescriptorAlignment(desc, 1, yOffset, elemBits) * (elemBits / 8) >=
+         kAlignBytes;
 }
 
 } // namespace mlir::triton::intel

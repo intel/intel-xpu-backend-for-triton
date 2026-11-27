@@ -1,4 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -337,9 +339,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     int numRows = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    // Add an element that won't be accessed at the end of the row to avoid bank
-    // conflicts.
-    int rowLength = threadsPerWarp + 1;
+    unsigned bytesPerElement = elementType.getIntOrFloatBitWidth() / 8;
+    // Padded rows: bank conflicts and, for sub-dword elements, dword alignment
+    // of the per-lane row loads below.
+    int rowLength =
+        intel::getSubGroupTransposeRowLength(threadsPerWarp, bytesPerElement);
     Type offsetType = getTypeConverter()->getIndexType();
     unsigned offsetBitWidth = offsetType.getIntOrFloatBitWidth();
     Value subGroupId = getValueOrCreateCastToIndexLike(
@@ -366,8 +370,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Load from matrix, non-trasposed.
 
-    // Each work-item will load a row (but the last garbage element) and go to
-    // the next row it needs to handle.
+    // Each work-item will load a row (but the padding at its end) and go to the
+    // next row it needs to handle.
 
     int32_t workItemStride =
         numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
@@ -388,9 +392,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     VectorType vecType = vec_ty(elementType, vecLoadWidth);
     assert(threadsPerWarp % vecLoadWidth == 0 &&
            "Column must be loadable with N loads");
+    // The row pitch only guarantees the per-lane row loads 4-byte alignment, or
+    // 8-byte for 8-byte elements (scratch buffers start 128-byte aligned).
+    // State it, rather than let LLVM assume the vector type's natural
+    // alignment of 16 to 128 bytes: with the former 17- and 34-byte rows of 8-
+    // and 16-bit elements, that over-claim read wrong data on CRI, PVC and BMG
+    // (#8749).
+    unsigned loadAlignment = std::max(4u, bytesPerElement);
+    assert((rowLength * bytesPerElement) % loadAlignment == 0 &&
+           "Row pitch must keep the per-lane loads aligned");
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
-        transposedVecs.push_back(b.load(vecType, workItemBasePtr));
+        transposedVecs.push_back(
+            b.load(vecType, workItemBasePtr, loadAlignment));
         workItemBasePtr =
             b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
                   ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);

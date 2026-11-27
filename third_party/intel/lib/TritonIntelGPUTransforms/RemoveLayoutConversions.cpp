@@ -121,6 +121,30 @@ void eraseUnusedOps(SetVector<Operation *> &opsToDelete) {
       op->erase();
 }
 
+// Erase the trivially dead ops in `funcOp`. Ops with regions are kept, so no
+// queued op can be erased along with its parent.
+static void eraseTriviallyDeadOps(tt::FuncOp funcOp) {
+  auto isDead = [](Operation *op) {
+    return op->getNumRegions() == 0 && isOpTriviallyDead(op);
+  };
+  SetVector<Operation *> worklist;
+  funcOp.walk([&](Operation *op) {
+    if (isDead(op))
+      worklist.insert(op);
+  });
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    SmallVector<Operation *> producers;
+    for (Value operand : op->getOperands())
+      if (Operation *defOp = operand.getDefiningOp())
+        producers.push_back(defOp);
+    op->erase();
+    for (Operation *defOp : producers)
+      if (isDead(defOp))
+        worklist.insert(defOp);
+  }
+}
+
 // Return the distinct DPAS result encodings of the tt.dot ops in `funcOp`, in
 // walk order.
 static SmallVector<ttgi::DpasEncodingAttr>
@@ -198,6 +222,7 @@ public:
   void rewriteAssertOp(tt::AssertOp assertOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
   bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
+  bool rewriteDescriptorScatterOp(ttgi::DescriptorScatterOp scatterOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
   void setEncodingInPlace(Value value, Attribute encoding);
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
@@ -241,6 +266,7 @@ public:
   void hoistConvertOnTopOfExtOrBroadcast(ttg::ConvertLayoutOp convertOp);
   bool hoistConvertIntoConditionals();
   void hoistConvertIntoConditionals(ttg::ConvertLayoutOp convertOp);
+  void foldDotOperandConvertsIntoLoads();
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ttg::ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
@@ -780,6 +806,10 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (rewriteDescriptorStoreOp(descStoreOp))
             continue;
         }
+        if (auto scatterOp = dyn_cast<ttgi::DescriptorScatterOp>(&op)) {
+          if (rewriteDescriptorScatterOp(scatterOp))
+            continue;
+        }
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -1032,6 +1062,38 @@ bool LayoutPropagation::rewriteDescriptorStoreOp(
 
   Value newSrc = getValueAs(src, targetEncoding);
   storeOp.getSrcMutable().assign(newSrc);
+  return true;
+}
+
+// The scatter takes the analysis encoding only if that layout admits sub-group
+// block writes; otherwise the caller converts both operands back.
+bool LayoutPropagation::rewriteDescriptorScatterOp(
+    ttgi::DescriptorScatterOp scatterOp) {
+  Value src = scatterOp.getSrc();
+  auto it = layouts.find(src);
+  if (it == layouts.end())
+    return false;
+
+  LayoutInfo &info = it->second;
+  assert(info.encodings.size() == 1 &&
+         "we should have resolved to a single encoding");
+  Attribute targetEncoding = info.encodings[0];
+  // Nothing to sink; this also keeps encoding-less sources (null anchors) away
+  // from the helper.
+  if (getEncodingBeforeRewrite(src) == targetEncoding)
+    return false;
+  RankedTensorType newSrcType =
+      scatterOp.getSrc().getType().cloneWithEncoding(targetEncoding);
+  if (!ttgi::getScatterBlockWriteRuns(newSrcType))
+    return false;
+
+  scatterOp.getSrcMutable().assign(getValueAs(src, targetEncoding));
+
+  Value x = scatterOp.getXOffsets();
+  OpBuilder builder(scatterOp);
+  scatterOp.getXOffsetsMutable().assign(ttgi::buildConvertedXOffsets(
+      builder, scatterOp.getLoc(), getValueAs(x, getEncodingBeforeRewrite(x)),
+      newSrcType));
   return true;
 }
 
@@ -2573,6 +2635,25 @@ void LayoutRematerialization::hoistConvertDotOperand(
   rewriteSlice(innerSlice, layout, convertOp, mapping);
 }
 
+// Retry backward rematerialization on dot operand converts of single-use loads,
+// such as those hoistConvertDotOperand leaves when an anchor blocked the slice.
+void LayoutRematerialization::foldDotOperandConvertsIntoLoads() {
+  SmallVector<ttg::ConvertLayoutOp> convertOps;
+  funcOp.walk([&](ttg::ConvertLayoutOp convertOp) {
+    Value src = convertOp.getSrc();
+    Operation *defOp = src.getDefiningOp();
+    if (isa<ttg::DotOperandEncodingAttr>(convertOp.getType().getEncoding()) &&
+        isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp>(defOp) &&
+        src.hasOneUse())
+      convertOps.push_back(convertOp);
+  });
+  for (ttg::ConvertLayoutOp convertOp : convertOps) {
+    backwardRematerialization(convertOp);
+    if (opToDelete.contains(convertOp))
+      LDBG("folded dot operand convert into load " << convertOp.getSrc());
+  }
+}
+
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
@@ -2830,6 +2911,14 @@ void hoistConvert(
     {
       LayoutRematerialization layoutRemat(funcOp, convertCostCache);
       layoutRemat.hoistConvertDotOperand();
+      layoutRemat.cleanup();
+    }
+    // The hoists leave the original producers dead but alive; erase them so a
+    // load whose convert was hoisted has a single use.
+    eraseTriviallyDeadOps(funcOp);
+    {
+      LayoutRematerialization layoutRemat(funcOp, convertCostCache);
+      layoutRemat.foldDotOperandConvertsIntoLoads();
       layoutRemat.cleanup();
     }
   });

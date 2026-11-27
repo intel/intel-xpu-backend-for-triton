@@ -15,15 +15,18 @@
 // loop too (#8060).
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <gtest/gtest.h>
 
 using namespace mlir;
 using namespace mlir::triton::gpu::intel;
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 
@@ -145,6 +148,169 @@ TEST_F(IsDivisibleTest, LoopCarriedAddInNestedLoop) {
   EXPECT_TRUE(isDivisible(x, 16));
   auto inner = cast<scf::ForOp>(x.getOwner()->getParentOp());
   EXPECT_FALSE(isDivisible(inner.getInductionVar(), 16));
+}
+
+// getScatterBlockWriteRuns (#8868): one fixture per rule of its contract.
+class ScatterBlockWriteRunsTest : public ::testing::Test {
+public:
+  void SetUp() override {
+    ctx.getOrLoadDialect<ttg::TritonGPUDialect>();
+    ctx.getOrLoadDialect<TritonIntelGPUDialect>();
+  }
+
+  RankedTensorType dpas(ArrayRef<int64_t> shape, unsigned threadsPerWarp) {
+    auto enc = DpasEncodingAttr::get(
+        &ctx, /*repeatCount=*/8, /*systolicDepth=*/8, /*executionSize=*/16,
+        /*opsPerChannel=*/2, /*warpsPerCTA=*/{2, 2}, /*repCluster=*/{2, 2},
+        threadsPerWarp);
+    return RankedTensorType::get(shape, BFloat16Type::get(&ctx), enc);
+  }
+
+  RankedTensorType blocked(ArrayRef<int64_t> shape, Type elemTy,
+                           ArrayRef<unsigned> sizePerThread,
+                           ArrayRef<unsigned> threadsPerWarp,
+                           SmallVector<unsigned, 2> warpsPerCTA = {1, 1}) {
+    auto enc = ttg::BlockedEncodingAttr::get(
+        &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, /*order=*/{1, 0},
+        ttg::CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2));
+    return RankedTensorType::get(shape, elemTy, enc);
+  }
+
+  // A bf16 layout whose 16 lanes hold consecutive columns.
+  RankedTensorType generic(ArrayRef<int64_t> shape,
+                           std::vector<std::vector<int32_t>> regBases,
+                           std::vector<std::vector<int32_t>> warpBases) {
+    auto S = [&](StringRef name) { return StringAttr::get(&ctx, name); };
+    triton::LinearLayout ll({{S("register"), regBases},
+                             {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                             {S("warp"), warpBases},
+                             {S("block"), {}}},
+                            {S("dim0"), S("dim1")});
+    return RankedTensorType::get(
+        shape, BFloat16Type::get(&ctx),
+        ttg::GenericLinearEncodingAttr::get(&ctx, std::move(ll)));
+  }
+
+  // (row, col, regs) of each run, sorted: the contract leaves their order open.
+  using Run = std::tuple<int32_t, int32_t, SmallVector<unsigned>>;
+  static std::vector<Run> sorted(ArrayRef<ScatterBlockWriteRun> runs) {
+    std::vector<Run> result;
+    for (const ScatterBlockWriteRun &run : runs)
+      result.emplace_back(run.row, run.col, run.regs);
+    llvm::sort(result);
+    return result;
+  }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(ScatterBlockWriteRunsTest, AcceptsDpasBf16) {
+  auto runs = getScatterBlockWriteRuns(dpas({32, 64}, 16));
+  ASSERT_TRUE(runs.has_value());
+  // Each row of warp 0 holds two registers, at columns 0 and 16.
+  EXPECT_EQ(sorted(*runs), (std::vector<Run>{{0, 0, {0, 8}},
+                                             {1, 0, {1, 9}},
+                                             {2, 0, {2, 10}},
+                                             {3, 0, {3, 11}},
+                                             {4, 0, {4, 12}},
+                                             {5, 0, {5, 13}},
+                                             {6, 0, {6, 14}},
+                                             {7, 0, {7, 15}},
+                                             {8, 0, {16, 24}},
+                                             {9, 0, {17, 25}},
+                                             {10, 0, {18, 26}},
+                                             {11, 0, {19, 27}},
+                                             {12, 0, {20, 28}},
+                                             {13, 0, {21, 29}},
+                                             {14, 0, {22, 30}},
+                                             {15, 0, {23, 31}}}));
+}
+
+TEST_F(ScatterBlockWriteRunsTest, AcceptsBlockedUnitColumns) {
+  auto runs = getScatterBlockWriteRuns(
+      blocked({16, 64}, Float32Type::get(&ctx), {1, 1}, {1, 16}));
+  ASSERT_TRUE(runs.has_value());
+  EXPECT_EQ(runs->size(), 16u);
+  for (const ScatterBlockWriteRun &run : *runs)
+    EXPECT_EQ(run.regs.size(), 4u);
+}
+
+TEST_F(ScatterBlockWriteRunsTest, SplitsLongRuns) {
+  // One row of 16 registers, 16 columns apart, is cut into 8 + 8.
+  auto runs = getScatterBlockWriteRuns(
+      blocked({1, 256}, BFloat16Type::get(&ctx), {1, 1}, {1, 16}));
+  ASSERT_TRUE(runs.has_value());
+  EXPECT_EQ(sorted(*runs),
+            (std::vector<Run>{{0, 0, {0, 1, 2, 3, 4, 5, 6, 7}},
+                              {0, 128, {8, 9, 10, 11, 12, 13, 14, 15}}}));
+}
+
+TEST_F(ScatterBlockWriteRunsTest, SortsAndSplitsColumns) {
+  // Registers 0-3 sit at columns 0, 64, 16 and 80.
+  auto runs = getScatterBlockWriteRuns(
+      generic({1, 128}, {{0, 64}, {0, 16}}, {{0, 32}}));
+  ASSERT_TRUE(runs.has_value());
+  EXPECT_EQ(sorted(*runs), (std::vector<Run>{{0, 0, {0, 2}}, {0, 64, {1, 3}}}));
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsLaneRows) {
+  // Lane 16 starts row 1.
+  EXPECT_FALSE(getScatterBlockWriteRuns(dpas({32, 64}, 32)).has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsStridedLanes) {
+  // Lane l holds columns 2l and 2l + 1.
+  EXPECT_FALSE(getScatterBlockWriteRuns(
+                   blocked({16, 64}, BFloat16Type::get(&ctx), {1, 2}, {1, 16}))
+                   .has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsWidth) {
+  for (unsigned width : {8u, 64u})
+    EXPECT_FALSE(
+        getScatterBlockWriteRuns(
+            blocked({16, 64}, IntegerType::get(&ctx, width), {1, 1}, {1, 16}))
+            .has_value())
+        << "i" << width;
+}
+
+TEST_F(ScatterBlockWriteRunsTest, AcceptsSixteenByteSubgroup) {
+  EXPECT_TRUE(getScatterBlockWriteRuns(
+                  blocked({16, 64}, BFloat16Type::get(&ctx), {1, 1}, {1, 8}))
+                  .has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsNarrowSubgroup) {
+  // 4 lanes x 2 bytes: warp 1 starts 8 bytes in.
+  EXPECT_FALSE(
+      getScatterBlockWriteRuns(
+          blocked({16, 64}, BFloat16Type::get(&ctx), {1, 1}, {1, 4}, {1, 2}))
+          .has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsSwizzledWarp) {
+  // Warp 1 holds register 1 left of register 0.
+  EXPECT_FALSE(getScatterBlockWriteRuns(generic({2, 32}, {{0, 16}}, {{1, 16}}))
+                   .has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, RejectsOverlappingBases) {
+  // Register 1 and lane 1 hold the same element.
+  EXPECT_FALSE(
+      getScatterBlockWriteRuns(generic({1, 16}, {{0, 1}}, {})).has_value());
+}
+
+TEST_F(ScatterBlockWriteRunsTest, SkipsReplicatedRegisters) {
+  // At 16 columns, registers 8-15 and 24-31 replicate 0-7 and 16-23.
+  auto runs = getScatterBlockWriteRuns(dpas({16, 16}, 16));
+  ASSERT_TRUE(runs.has_value());
+  SmallVector<unsigned> regs;
+  for (const ScatterBlockWriteRun &run : *runs)
+    llvm::append_range(regs, run.regs);
+  llvm::sort(regs);
+  EXPECT_EQ(regs, (SmallVector<unsigned>{0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19,
+                                         20, 21, 22, 23}));
 }
 
 } // namespace

@@ -249,17 +249,28 @@ static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
   return success();
 }
 
+// The lowering reads each row's offset from the lane that owns the row, so the
+// x offsets of an encoded `valueType` must be its dim-1 slice.
+static LogicalResult
+verifyGatherScatterOffsetsEncoding(Operation *op, RankedTensorType valueType,
+                                   RankedTensorType offsetsType,
+                                   StringRef valueName) {
+  Attribute valueEnc = valueType.getEncoding();
+  if (!valueEnc)
+    return success();
+  auto offsetsEnc =
+      dyn_cast_or_null<SliceEncodingAttr>(offsetsType.getEncoding());
+  if (!offsetsEnc || offsetsEnc.getDim() != 1 ||
+      offsetsEnc.getParent() != valueEnc)
+    return op->emitOpError("x offsets must be sliced along dim 1 from the ")
+           << valueName << " encoding, but got " << offsetsType;
+  return success();
+}
+
 LogicalResult DescriptorGatherOp::verify() {
-  // The lowering reads each row's offset from the lane that owns the row.
-  if (Attribute resultEnc = getResult().getType().getEncoding()) {
-    auto offsetsEnc = dyn_cast_or_null<SliceEncodingAttr>(
-        getXOffsets().getType().getEncoding());
-    if (!offsetsEnc || offsetsEnc.getDim() != 1 ||
-        offsetsEnc.getParent() != resultEnc)
-      return emitOpError("x offsets must be sliced along dim 1 from the result "
-                         "encoding, but got ")
-             << getXOffsets().getType();
-  }
+  if (failed(verifyGatherScatterOffsetsEncoding(
+          *this, getResult().getType(), getXOffsets().getType(), "result")))
+    return failure();
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
       getXOffsets().getType());
@@ -267,6 +278,9 @@ LogicalResult DescriptorGatherOp::verify() {
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
+  if (failed(verifyGatherScatterOffsetsEncoding(
+          *this, getSrc().getType(), getXOffsets().getType(), "source")))
+    return failure();
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getSrc().getType(),
       getXOffsets().getType());

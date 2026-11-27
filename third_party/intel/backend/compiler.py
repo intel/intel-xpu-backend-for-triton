@@ -1,8 +1,8 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm
 from .native import intel
-from .driver import (compile_module_from_src, get_ocloc_version, has_dp4a_operand_order_fix, has_spirv_2d_block_io,
-                     is_lts)
+from .driver import (compile_module_from_src, get_ocloc_version, has_bf16_fpext, has_dp4a_operand_order_fix,
+                     has_spirv_2d_block_io, is_lts)
 from .track import track
 from .errors import IntelGPUError, WorkGroupSizeOutOfResources
 from .extension_utils import query_device_extensions
@@ -76,6 +76,8 @@ class XPUOptions:
     is_lts: bool = True
     # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
     has_spirv_2d_block_io: bool = True
+    # Whether bf16 -> f32 can be a plain `fpext`; see `has_bf16_fpext`.
+    has_bf16_fpext: bool = False
     # Whether IGC folds integer mul/add chains into dp4a correctly (#7854); see `has_dp4a_operand_order_fix`.
     has_dp4a_operand_order_fix: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
@@ -420,6 +422,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
         igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
         options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
+        options.has_bf16_fpext = has_bf16_fpext(igc_version)
         # No fallback to the driver's version here: an unknown `ocloc` version keeps the dp4a lowering.
         dp4a_ver = get_ocloc_version() if native else self.target.arch.get("driver_version")
         options.has_dp4a_operand_order_fix = has_dp4a_operand_order_fix(dp4a_ver)
@@ -726,6 +729,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.set_is_lts(mod)
         # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
         intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
+        intel.set_use_bf16_fpext(mod, options.has_bf16_fpext)
         intel.set_use_dp4a_integer_fma(mod, not options.has_dp4a_operand_order_fix)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report

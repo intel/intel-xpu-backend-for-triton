@@ -75,12 +75,29 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
     return success();
   }
 };
+
+// SPV_KHR_bfloat16 comes with native bf16 arithmetic; IGC < 2.43 drops an abs
+// applied to the fpext.
+static bool canUseBF16FPExt(ConversionPatternRewriter &rewriter) {
+  Operation *op = rewriter.getInsertionBlock()->getParentOp();
+  return mlir::LLVM::intel::hasModuleAttr(
+             op,
+             TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName()) &&
+         mlir::LLVM::intel::hasModuleAttr(
+             op, TritonIntelGPUDialect::getUseBF16FPExtAttrName());
+}
 } // namespace
 
 namespace mlir::triton::intel {
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v) {
   TritonLLVMIRRewriter b(loc, rewriter);
+  // A plain fpext (SPV_KHR_bfloat16), unlike the builtin call, lets LLVM hoist
+  // the extension past selects as it does for fp16.
+  if (canUseBF16FPExt(rewriter))
+    return LLVM::FPExtOp::create(rewriter, loc,
+                                 getTypeWithSameShape(v.getType(), f32_ty), v);
+
   auto as_int16 = b.bitcast(v, i16_ty).getResult();
   auto result = convertWithFunctionCall(
       b, as_int16, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,

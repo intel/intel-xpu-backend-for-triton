@@ -167,14 +167,20 @@ The builder extracts `dotOpEnc.getKWidth()` and calls the backend-specific `comp
 
 ### Bank Conflict Avoidance via Padding
 
-For sub-group transpose operations through SLM, padding is added to prevent bank conflicts:
+For sub-group transpose operations through SLM, rows are padded (`getSubGroupTransposeRowLength()`
+in `third_party/intel/lib/Analysis/Utility.cpp`, shared by the allocation analysis and the lowering):
 ```
-rowLength = threadsPerWarp + 1    // Extra element per row avoids bank conflicts
-numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1)
+padding = max(1, 4 / bytesPerElement)   // 4 for i8, 2 for i16, 1 for i32/i64
+rowLength = threadsPerWarp + padding
+numMatrixCells = (numElements / subGroupSize) * rowLength
 scratchBytes = numMatrixCells * bytesPerElement
 ```
 
-The `+1` padding ensures that adjacent rows map to different SLM banks.
+The padding keeps adjacent rows on different SLM banks (the pitch in dwords is odd for 1-, 2- and
+4-byte elements; 8-byte elements keep their 136-byte pitch) and, for sub-dword element types, keeps
+every row dword-aligned. Each lane loads its row as one vector, and the load states the alignment
+the pitch guarantees, `max(4, bytesPerElement)`, rather than the vector type's natural alignment
+(issue #8749: a 17-byte i8 pitch returned data shifted by `address % 4`).
 
 ### Shared Memory Order
 
@@ -301,7 +307,8 @@ Uses LinearLayout composition: `dstLayout.invertAndCompose(srcLayout)`. Valid sh
 When source and destination layouts differ by a transpose:
 
 1. **Store phase**: Each thread stores its elements to SLM at `row * rowLength + col`
-   - `rowLength = threadsPerWarp + 1` (padding for bank conflict avoidance)
+   - `rowLength = getSubGroupTransposeRowLength(threadsPerWarp, bytesPerElement)` (padding for
+     bank conflicts and dword-aligned rows, see "Bank Conflict Avoidance via Padding")
    - Uses `SubGroupBlockWriteOp` for efficient writes
 2. **Load phase**: Each thread loads back in the transposed order using vectorized loads
 3. Supports both 8/16/32/64-bit integer elements and bitcastable float types

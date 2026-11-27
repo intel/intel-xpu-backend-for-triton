@@ -42,13 +42,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // Check scracth memory configuration for different sub-group transpose-like layout conversions.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: ttg.shared = 544 : i32
+// CHECK-SAME: ttg.shared = 576 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @test_f16(%arg0: tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked1> {
     // Scratch buffers carry both the offset and the allocated size.
-    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 544 : i32
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 576 : i32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
     tt.return %0 : tensor<16x16xf16, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// 8-bit elements: rows are padded to 20 bytes (a dword multiple), 16 rows per sub-group (#8749).
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 320 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @test_i8(%arg0: tensor<16x16xi8, #blocked>) -> tensor<16x16xi8, #blocked1> {
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 320 : i32
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xi8, #blocked> -> tensor<16x16xi8, #blocked1>
+    tt.return %0 : tensor<16x16xi8, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// 8-bit elements, sub-group size 32: 32 rows padded to 36 bytes (#8749).
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 1152 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @test_i8_sg32(%arg0: tensor<32x32xi8, #blocked>) -> tensor<32x32xi8, #blocked1> {
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 1152 : i32
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #blocked> -> tensor<32x32xi8, #blocked1>
+    tt.return %0 : tensor<32x32xi8, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// 16-bit elements, sub-group size 32: 32 rows padded to 34 elements (68 bytes) (#8749).
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 2176 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @test_i16_sg32(%arg0: tensor<32x32xi16, #blocked>) -> tensor<32x32xi16, #blocked1> {
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 2176 : i32
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi16, #blocked> -> tensor<32x32xi16, #blocked1>
+    tt.return %0 : tensor<32x32xi16, #blocked1>
   }
 }
 
@@ -114,10 +165,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // starts emitting it on call sites. Only the offset is stable across both.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: ttg.shared = 544 : i32
+// CHECK-SAME: ttg.shared = 576 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func private @test_callee(%arg0: tensor<16x16xf16, #blocked>) {
-    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 544 : i32
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 576 : i32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
     tt.return
   }

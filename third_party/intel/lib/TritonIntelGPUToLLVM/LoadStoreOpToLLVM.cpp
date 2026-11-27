@@ -3,6 +3,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
@@ -676,16 +677,18 @@ struct LoadStoreConversionBase {
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp,
-                mlir::triton::gpu::intel::DescriptorGatherOp>::value>>
+                mlir::triton::gpu::intel::DescriptorGatherOp,
+                mlir::triton::gpu::intel::DescriptorScatterOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
     if (!mlir::LLVM::intel::hasModuleAttr(
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // Predicated load and store are enabled by default for all five op types
+    // Predicated load and store are enabled by default for all six op types
     // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp and the ttig
-    // DescriptorGatherOp). Either env var (TRITON_INTEL_PREDICATED_LOAD,
-    // TRITON_INTEL_PREDICATED_STORE) overrides in both directions.
+    // DescriptorGatherOp and DescriptorScatterOp). Either env var
+    // (TRITON_INTEL_PREDICATED_LOAD, TRITON_INTEL_PREDICATED_STORE) overrides
+    // in both directions.
     //
     // Note that DescriptorLoadOp always emits a boundary-check mask, even for
     // provably in-bounds tiles, so this choice applies to all of its masked
@@ -708,7 +711,9 @@ struct LoadStoreConversionBase {
                                          mlir::triton::gpu::intel::
                                              DescriptorGatherOp>::value) {
       return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
-    } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
+    } else if constexpr (llvm::is_one_of<OpType, DescriptorStoreOp,
+                                         mlir::triton::gpu::intel::
+                                             DescriptorScatterOp>::value) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
 
@@ -1234,7 +1239,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       if (cfg.numElemsPerLoad >= elemsPerLanePerDPASInst) {
         static const bool multipleCPerLoad = triton::tools::getBoolEnv(
             "TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD");
-        if (!isTransposeRequired && !multipleCPerLoad) {
+        // Use the C instruction shape only when the clamped tile holds it.
+        if (!isTransposeRequired && !multipleCPerLoad && numDPASOperands) {
           assert(numPackedVals == 1 &&
                  "invalid numPackedVals for DPAS C operand");
           cfg.tileHeight = dpasLayout.getDPASInstShapeC()[0];
@@ -2864,37 +2870,7 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
          {dim1Attr, llEncoding.getOutDimSize(dim1Attr)}},
         /*requireSurjective=*/false);
   }
-};
 
-struct DescriptorGatherOpConversion
-    : public ConvertOpToLLVMPattern<
-          mlir::triton::gpu::intel::DescriptorGatherOp>,
-      public DescriptorGatherConversionBase {
-  using ConvertOpToLLVMPattern<
-      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
-
-  DescriptorGatherOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(
-            converter, benefit),
-        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
-                                       strideAnalysis) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (succeeded(lowerDescriptorGather(op, adaptor, rewriter)))
-      return success();
-
-    return rewriter.notifyMatchFailure(
-        op, "failed to lower ttig.descriptor_gather");
-  }
-
-private:
   struct GatherAddressAndPred {
     Value pred;
     Value addr;
@@ -2908,22 +2884,6 @@ private:
     bool chunksSpanColumns = false;
     LinearLayout regMapping;
     LinearLayout offMapping;
-  };
-
-  struct GatherLoadCommon {
-    const DescriptorFields &desc;
-    ArrayRef<Value> offsetsX;
-    Value basicOffsetY;
-    Type valueElemTy;
-    Type unpackedType;
-  };
-
-  struct GatherStringAttrs {
-    StringAttr kRegister;
-    StringAttr kLane;
-    StringAttr kPtrs;
-    StringAttr kOffIdx;
-    StringAttr kDim1;
   };
 
   static Value
@@ -3039,6 +2999,80 @@ private:
     config.offMapping = valueToOffsetMap.concatIns(laneMapping);
     return config;
   }
+
+  // Each lane loads or stores `vec` registers that are adjacent columns of one
+  // row with one predicated vector access, as tt.load and tt.store do. `vec`
+  // divides shape[1] and is aligned with y, so a chunk is either wholly in or
+  // wholly out of bounds and its first column's predicate covers it.
+  struct VectorizedAccess {
+    unsigned vec;
+    Type type;
+    unsigned alignment;
+  };
+
+  VectorizedAccess getVectorizedAccess(Operation *op, Value desc, Value yOffset,
+                                       RankedTensorType tensorTy,
+                                       Type valueElemTy) const {
+    SmallVector<Value> fastDimIndex{yOffset, yOffset};
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), desc, fastDimIndex,
+                             tensorTy, valueElemTy, nullptr);
+    if (triton::gpu::toGenericLinearEncoding(tensorTy).getOrder()[0] != 1)
+      vec = 1;
+    unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    unsigned totalWidth = elemBits * vec;
+    unsigned width = std::min(totalWidth, std::max(32u, elemBits));
+    unsigned nWords = std::max(1u, totalWidth / width);
+    Type wordTy = IntegerType::get(tensorTy.getContext(), width);
+    Type type = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+    return {vec, type, nWords * width / 8};
+  }
+};
+
+struct DescriptorGatherOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::gpu::intel::DescriptorGatherOp>,
+      public DescriptorGatherConversionBase {
+  using ConvertOpToLLVMPattern<
+      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
+
+  DescriptorGatherOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(
+            converter, benefit),
+        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
+                                       strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (succeeded(lowerDescriptorGather(op, adaptor, rewriter)))
+      return success();
+
+    return rewriter.notifyMatchFailure(
+        op, "failed to lower ttig.descriptor_gather");
+  }
+
+private:
+  struct GatherLoadCommon {
+    const DescriptorFields &desc;
+    ArrayRef<Value> offsetsX;
+    Value basicOffsetY;
+    Type valueElemTy;
+    Type unpackedType;
+  };
+
+  struct GatherStringAttrs {
+    StringAttr kRegister;
+    StringAttr kLane;
+    StringAttr kPtrs;
+    StringAttr kOffIdx;
+    StringAttr kDim1;
+  };
 
   Value generatePerLaneLoad(Location loc, ConversionPatternRewriter &rewriter,
                             const GatherLoadCommon &common,
@@ -3188,23 +3222,11 @@ private:
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
 
-    // Each lane loads `vec` registers that are adjacent columns of one row with
-    // one predicated vector load, as tt.load does. `vec` divides shape[1] and
-    // is aligned with y, so a chunk is either wholly in or wholly out of bounds
-    // and its first column's predicate covers it.
     auto emitVectorized = [&]() -> Value {
-      SmallVector<Value> fastDimIndex{op.getYOffset(), op.getYOffset()};
-      unsigned vec =
-          getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
-                               fastDimIndex, resultType, valueElemTy, nullptr);
-      if (triton::gpu::toGenericLinearEncoding(resultType).getOrder()[0] != 1)
-        vec = 1;
-      unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-      unsigned totalWidth = elemBits * vec;
-      unsigned width = std::min(totalWidth, std::max(32u, elemBits));
-      unsigned nWords = std::max(1u, totalWidth / width);
-      Type wordTy = IntegerType::get(ctx, width);
-      Type retTy = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+      VectorizedAccess access = getVectorizedAccess(
+          op, op.getDesc(), op.getYOffset(), resultType, valueElemTy);
+      unsigned vec = access.vec;
+      Type retTy = access.type;
       Value zero = LLVM::ZeroOp::create(rewriter, loc, retTy);
       bool predicated = canUsePredicatedInstructions(op);
       unsigned regMask = getFreeVariableMasks(resultType)[kRegister];
@@ -3241,7 +3263,7 @@ private:
         } else {
           auto createLoad = [&]() {
             return SmallVector<Value>{
-                b.load(retTy, gatherAddr.addr, nWords * width / 8)};
+                b.load(retTy, gatherAddr.addr, access.alignment)};
           };
           ret = *LLVM::intel::createPredicatedBlock(
                      rewriter, loc, gatherAddr.pred,
@@ -3352,6 +3374,239 @@ private:
     rewriter.setInsertionPointToStart(endBlock);
     rewriter.replaceOp(op, endBlock->addArgument(llvmResultStructTy, loc));
     return success();
+  }
+};
+
+struct DescriptorScatterOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::gpu::intel::DescriptorScatterOp>,
+      public DescriptorGatherConversionBase {
+  using ConvertOpToLLVMPattern<
+      mlir::triton::gpu::intel::DescriptorScatterOp>::ConvertOpToLLVMPattern;
+
+  DescriptorScatterOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorScatterOp>(
+            converter, benefit),
+        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
+                                       strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::intel::DescriptorScatterOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    RankedTensorType srcTy = op.getSrc().getType();
+    if (!srcTy.getEncoding())
+      return rewriter.notifyMatchFailure(op, "source has no encoding");
+
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    ScatterOperands s;
+    s.valueElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    s.threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    s.ll = triton::gpu::toLinearLayout(srcTy);
+    s.offMapping = buildLayoutConfig(
+                       s.ll, srcTy,
+                       triton::gpu::toLinearLayout(op.getXOffsets().getType()),
+                       s.valueElemTy, mod, /*allowFastPath=*/false)
+                       .offMapping;
+
+    // The alignment that isAlignedNativeScatter checks in TTIR: rows and y are
+    // 16-byte aligned and stride1 is 1.
+    unsigned bits = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+    std::optional<SmallVector<ScatterBlockWriteRun>> runs;
+    if (const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .isDescriptorRow16ByteAligned(op.getDesc(), op.getYOffset(), bits))
+      runs = getScatterBlockWriteRuns(srcTy);
+
+    s.desc = unpackDescriptor(adaptor.getDesc(), /*rank=*/2, loc, rewriter);
+    s.offsetsX = unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    s.srcElems = unpackTensorElements(loc, adaptor.getSrc(), rewriter, srcTy);
+    s.y64 = b.sext(i64_ty, adaptor.getYOffset());
+    Value shape0 = b.trunc(i32_ty, s.desc.shapes[0]);
+    s.rowLimit = b.zext(i64_ty, shape0);
+    if (runs)
+      emitBlockWrites(op, *runs, s, rewriter);
+    else
+      emitPerLaneStores(op, s, rewriter);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  struct ScatterOperands {
+    LinearLayout ll;
+    LinearLayout offMapping;
+    DescriptorFields desc;
+    SmallVector<Value> offsetsX;
+    SmallVector<Value> srcElems;
+    Value y64;
+    // The gather's row check is `sext(x) <u rowLimit`.
+    Value rowLimit;
+    Type valueElemTy;
+    unsigned threadsPerWarp;
+  };
+
+  // Signed, so that a negative y fails it.
+  static Value isColInBounds(TritonLLVMOpBuilder &b,
+                             const DescriptorFields &desc, Value col64) {
+    Value isNonNegative = b.icmp_sge(col64, b.i64_val(0));
+    Value isBelowShape = b.icmp_slt(col64, desc.shapes[1]);
+    return b.and_(isNonNegative, isBelowShape);
+  }
+
+  void emitStore(mlir::triton::gpu::intel::DescriptorScatterOp op,
+                 ConversionPatternRewriter &rewriter, Location loc, Value addr,
+                 Value val, Value pred, unsigned alignment) const {
+    if (canUsePredicatedInstructions(op)) {
+      TritonGEN::PredicatedStoreOp::create(
+          rewriter, loc, addr, val, pred,
+          TritonGEN::StoreCacheControl::DEFAULT);
+      return;
+    }
+    LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
+      TritonLLVMOpBuilder(loc, rewriter).store(val, addr, alignment);
+      return ArrayRef<Value>();
+    });
+  }
+
+  // One sub-group block write per run. Its predicates are uniform, using the
+  // sub-group ID, so the collective is never under a lane-divergent branch.
+  void emitBlockWrites(mlir::triton::gpu::intel::DescriptorScatterOp op,
+                       ArrayRef<ScatterBlockWriteRun> runs,
+                       const ScatterOperands &s,
+                       ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
+    StringAttr kDim1 = S("dim1");
+
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc, /*upperBound=*/nullptr));
+    Value warpOk;
+    if (int32_t warpMask = s.ll.getFreeVariableMasks().lookup(kWarp)) {
+      Value maskedWarpId = b.and_(warpId, b.i32_val(warpMask));
+      warpOk = b.icmp_eq(maskedWarpId, b.i32_val(0));
+    }
+    Value laneId = b.zext(i64_ty, getLaneAndWarpId(rewriter, loc).first);
+    unsigned wordBits = s.valueElemTy.getIntOrFloatBitWidth();
+    Type wordTy = int_ty(wordBits);
+    auto toWord = [&](unsigned reg) {
+      Value elem = s.srcElems[reg];
+      return elem.getType() == wordTy ? elem : b.bitcast(elem, wordTy);
+    };
+
+    for (const ScatterBlockWriteRun &run : runs) {
+      auto coords = applyLinearLayout(loc, rewriter, s.ll,
+                                      {{kRegister, b.i32_val(run.regs[0])},
+                                       {kLane, b.i32_val(0)},
+                                       {kWarp, warpId},
+                                       {kBlock, b.i32_val(0)}});
+      unsigned xIdx =
+          s.offMapping.apply({{kRegister, run.regs[0]}, {kLane, 0}})[0].second;
+      Value x = targetInfo.shuffleIdx(rewriter, loc, s.offsetsX[xIdx], /*i=*/0);
+      Value x64 = b.sext(i64_ty, x);
+      Value rowOk = b.icmp_ult(x64, s.rowLimit);
+      Value rowOffset = b.mul(x64, s.desc.strides[0]);
+      Value c0 = b.add(s.y64, b.zext(i64_ty, getNamedOffset(coords, kDim1)));
+      Value ge = b.icmp_sge(c0, b.i64_val(0));
+      Value limit = b.sub(s.desc.shapes[1],
+                          b.i64_val(run.regs.size() * s.threadsPerWarp));
+      Value le = b.icmp_sle(c0, limit);
+      Value winOk = b.and_(ge, le);
+
+      Value inWindow = maybeAnd(rewriter, loc, warpOk, b.and_(rowOk, winOk));
+      LLVM::intel::createPredicatedBlock(rewriter, loc, inWindow, [&] {
+        Value offset = b.add(rowOffset, c0);
+        Value addr = b.gep(ptr_ty(ctx, 1), s.valueElemTy, s.desc.base, offset);
+        Value data;
+        if (run.regs.size() == 1) {
+          data = toWord(run.regs[0]);
+        } else {
+          data = b.undef(vec_ty(wordTy, run.regs.size()));
+          for (auto [i, reg] : llvm::enumerate(run.regs))
+            data = b.insert_element(data, toWord(reg), b.i32_val(i));
+        }
+        TritonGEN::SubGroupBlockWriteOp::create(rewriter, loc, addr, data);
+        return ArrayRef<Value>();
+      });
+
+      Value outOfWindow = b.xor_(winOk, b.true_val());
+      Value inRows =
+          maybeAnd(rewriter, loc, warpOk, b.and_(rowOk, outOfWindow));
+      LLVM::intel::createPredicatedBlock(rewriter, loc, inRows, [&] {
+        Value laneCol = b.add(c0, laneId);
+        for (auto [i, reg] : llvm::enumerate(run.regs)) {
+          Value col = b.add(laneCol, b.i64_val(i * s.threadsPerWarp));
+          Value offset = b.add(rowOffset, col);
+          Value addr =
+              b.gep(ptr_ty(ctx, 1), s.valueElemTy, s.desc.base, offset);
+          Value colOk = isColInBounds(b, s.desc, col);
+          emitStore(op, rewriter, loc, addr, toWord(reg), colOk, wordBits / 8);
+        }
+        return ArrayRef<Value>();
+      });
+    }
+  }
+
+  // The gather's vectorized path (emitVectorized), with stores.
+  void emitPerLaneStores(mlir::triton::gpu::intel::DescriptorScatterOp op,
+                         const ScatterOperands &s,
+                         ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
+    StringAttr kDim1 = S("dim1");
+    RankedTensorType srcTy = op.getSrc().getType();
+
+    VectorizedAccess access = getVectorizedAccess(
+        op, op.getDesc(), op.getYOffset(), srcTy, s.valueElemTy);
+    unsigned vec = access.vec;
+
+    llvm::MapVector<StringAttr, int32_t> freeVarMasks =
+        getFreeVariableMasks(srcTy);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    for (unsigned vecStart = 0; vecStart < s.srcElems.size(); vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, freeVarMasks.lookup(kRegister)))
+        continue;
+      unsigned xIdx =
+          s.offMapping.apply({{kRegister, vecStart}, {kLane, 0}})[0].second;
+      auto coords = applyLinearLayout(loc, rewriter, s.ll,
+                                      {{kRegister, b.i32_val(vecStart)},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, b.i32_val(0)}});
+      Value x64 = b.sext(i64_ty, s.offsetsX[xIdx]);
+      Value col64 = b.add(s.y64, b.zext(i64_ty, getNamedOffset(coords, kDim1)));
+      Value rowOk = b.icmp_ult(x64, s.rowLimit);
+      Value inBounds = b.and_(rowOk, isColInBounds(b, s.desc, col64));
+      Value pred = maybeAnd(rewriter, loc, inBounds, threadPred);
+      Value rowOffset = b.mul(x64, s.desc.strides[0]);
+      Value colOffset = b.mul(col64, s.desc.strides[1]);
+      Value offset = b.add(rowOffset, colOffset);
+      Value addr = b.gep(ptr_ty(ctx, 1), s.valueElemTy, s.desc.base, offset);
+      Value packed = b.undef(vec_ty(s.valueElemTy, vec));
+      for (unsigned i = 0; i < vec; ++i)
+        packed =
+            b.insert_element(packed, s.srcElems[vecStart + i], b.i32_val(i));
+      Value val = b.bitcast(packed, access.type);
+      emitStore(op, rewriter, loc, addr, val, pred, access.alignment);
+    }
   }
 };
 
@@ -4338,7 +4593,7 @@ struct StoreOpToBlockIOConversion
         pitch % 16 == 0)
       pitchBytes = pitch;
     StoreBoundaryClamp clamp = matchStoreBoundaryClamp(
-        op, contiguousDim, /*pitchDimIsBroadcast=*/rowStride == 0, pitchBytes,
+        op, contiguousDim, pitchBytes,
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass));
 
     // Only a column constancy below the unmasked tile's width, or a row one
@@ -5700,9 +5955,12 @@ struct Subgroup2DBlockLoadOpConversion
     // FIXME: Remove once IGC can split large 2D block loads.
     bool oneMatrixPerLoadForBT =
         op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    // Same tile as isDescriptorLoadLowerableTo2DBlock, which only accepts
+    // one in the inner two dims.
     BlockIOTileSizeInfo sizeInfo = getBlockIOLoadTileSize(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT,
+        /*innerRowDimOnly=*/true);
     assert(sizeInfo.isValid() && "expected valid tile size");
 
     Location loc = op.getLoc();
@@ -6291,9 +6549,9 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
                                                   benefit);
   // Block IO store patterns (loads are handled via ttig.2d_block_load path).
   patterns.add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion,
-               DescriptorGatherOpConversion>(typeConverter, targetInfo,
-                                             axisInfoAnalysis, strideAnalysis,
-                                             benefit.getBenefit() + 2);
+               DescriptorGatherOpConversion, DescriptorScatterOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
+      benefit.getBenefit() + 2);
   // TTIG ops from LowerTo2DBlockLoad TTGIR pass.
   patterns.add<ExtractDescOpConversion>(typeConverter, benefit);
   patterns.add<Subgroup2DBlockLoadOpConversion,

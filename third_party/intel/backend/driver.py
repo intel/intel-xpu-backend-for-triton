@@ -444,6 +444,22 @@ def has_spirv_2d_block_io(ver: str | None) -> bool:
     return int(m.group(3)) >= 39122
 
 
+def has_bf16_fpext(ver: str | None) -> bool:
+    """
+    Whether bf16 -> f32 can be a plain `fpext` instead of the `__spirv_ConvertBF16ToFINTEL` builtin.
+
+    IGC before 2.43 drops an abs applied to such an `fpext` (`fabs`, the frem divisor, libdevice `isnan`).
+    2.43 (compute-runtime 40627) is the first build verified to get it right. `ver` is read as in
+    `has_spirv_2d_block_io`, but a missing or unparsable version keeps the builtin.
+    """
+    if not ver:
+        return False
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return False
+    return int(m.group(3)) >= 40627
+
+
 def has_dp4a_operand_order_fix(ver: str | None) -> bool:
     """
     Whether this driver's IGC folds integer mul/add chains into `dp4a` without mis-pairing the operands (#7854).
