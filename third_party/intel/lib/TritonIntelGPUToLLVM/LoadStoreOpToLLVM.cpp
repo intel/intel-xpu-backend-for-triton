@@ -2462,7 +2462,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
     unsigned numElems = ptrElems.size();
     Type readTy = read->vec == 1 ? Type(read->wordTy)
                                  : Type(vec_ty(read->wordTy, read->vec));
@@ -2471,16 +2470,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        : Type(vec_ty(valueElemTy, read->chunkElems));
     TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     auto emitReads = [&]() {
-      // Lane l holds word l of each read group, so lane 0's address is this
-      // lane's minus l words.
-      Value laneId = getLaneAndWarpId(rewriter, loc).first;
-      Value laneOffset =
-          b.sub(b.i32_val(0), b.mul(laneId, b.i32_val(read->chunkElems)));
       SmallVector<Value> vals(numElems);
       for (unsigned g = 0; g < read->numGroups; ++g) {
         unsigned reg0 = g << read->groupShift;
-        Value ptr0 =
-            b.gep(ptr_ty(ctx, 1), valueElemTy, ptrElems[reg0], laneOffset);
+        // FIXME: Remove this workaround once the IGC bug is fixed, see
+        // https://github.com/intel/intel-xpu-backend-for-triton/issues/8959.
+        // The address is the same in every lane, but IGC can crash on its
+        // lane-dependent form, so broadcast lane 0's pointer.
+        Value ptr0 = targetInfo.shuffleIdx(rewriter, loc, ptrElems[reg0], 0);
         Value words = TritonGEN::SubGroupBlockReadOp::create(
             rewriter, loc, readTy, ptr0, cacheControl);
         for (unsigned j = 0; j < read->vec; ++j) {
@@ -3677,7 +3674,11 @@ struct DescriptorLoadOpConversion
                        : Type(vec_ty(valueElemTy, read->chunkElems));
     TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     auto emitReads = [&]() {
-      Value warpId = getLaneAndWarpId(rewriter, loc).second;
+      // IGC sees the sub-group id as uniform, but not tid / threadsPerWarp.
+      Value warpId = arith::IndexCastOp::create(
+          rewriter, loc, i32_ty,
+          mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                          /*upperBound=*/nullptr));
       SmallVector<Value> vals(numElems);
       for (unsigned g = 0; g < read->numGroups; ++g) {
         auto coords =

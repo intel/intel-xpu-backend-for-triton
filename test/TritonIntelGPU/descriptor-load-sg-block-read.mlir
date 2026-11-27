@@ -22,6 +22,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // TOLOAD: %[[FILL:.*]] = llvm.extractvalue %[[ZS]][0]
     // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%[[FILL]] : f32)
     // CHECK: ^[[READ]]:
+    // CONV: llvm.call spir_funccc @_Z16get_sub_group_id()
     // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> i32
     // CHECK: %[[VAL:.*]] = llvm.bitcast %[[WORD]] : i32 to f32
     // CHECK: llvm.br ^[[END]](%[[VAL]] : f32)
@@ -111,10 +112,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CONV: %[[OFF:.*]] = llvm.add %{{.*}}, %[[SCALED]] : i32
     // CONV: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[OFF]]]
     // TOLOAD: llvm.xor %{{.*}}, %[[C64]] : i32
-    // TOLOAD: %[[LANE0:.*]] = llvm.sub %{{.*}}, %{{.*}} : i32
-    // TOLOAD: %[[P0:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // TOLOAD: %[[B0:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(
+    // TOLOAD: %[[P0:.*]] = llvm.inttoptr %[[B0]] : i64 to !llvm.ptr<1>
     // TOLOAD: triton_gen.sub_group_block_read %[[P0]] {cache_control = Default} : !llvm.ptr<1> -> i32
-    // TOLOAD: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // TOLOAD: %[[B1:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(
+    // TOLOAD: %[[P1:.*]] = llvm.inttoptr %[[B1]] : i64 to !llvm.ptr<1>
     // CHECK: triton_gen.sub_group_block_read %[[P1]] {cache_control = Default} : !llvm.ptr<1> -> i32
     // CHECK-NOT: triton_gen.sub_group_block_read
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #linear>
