@@ -187,6 +187,10 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
                            bool hasRuntimeStride, int64_t fullRowBytes);
 
+/// Whether the stride-one index `v` is provably a multiple of `divisor`.
+bool isDescriptorIndexAligned(triton::intel::ModuleAxisInfoAnalysis &axisInfo,
+                              Value v, unsigned divisor);
+
 /// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);

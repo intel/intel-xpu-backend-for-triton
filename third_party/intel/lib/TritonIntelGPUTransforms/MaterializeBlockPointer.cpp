@@ -204,34 +204,6 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
   return div % divisor == 0;
 }
 
-// Check a descriptor's load/store-time index in the stride-one dimension.
-// Unlike isDescriptorAligned (base pointer / pitch), an unknown divisibility
-// must refuse here: make_tensor_descriptor makes no alignment promise about the
-// indices, so there is no contract to fall back on. ttgi::isDivisible alone was
-// once unsound because tt::intel::getFinalValue resolved an scf.for iteration
-// argument to its init operand without looking at the yielded update, so an
-// index initialized to zero and advanced by an odd step was proved from the
-// zero and an odd offsetX reached the 2D block message (issue #7990).
-// getFinalValue now stops at such an argument, and the dataflow analysis -
-// which trusts tt.divisibility hints - must still agree; being a conjunction it
-// can only refuse more. ttgi::isDivisible is kept rather than replaced because
-// it also refuses a nested-loop induction variable that the analysis would
-// admit, so dropping it would widen the gate; it is not kept for soundness.
-static bool
-isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
-                         unsigned divisor) {
-  // Note for future callers: an unknown divisibility is reported as 1, so
-  // calling this with divisor == 1 degrades it to a no-op. That is the correct
-  // answer at that divisor - everything is 1-aligned - but it is not a check.
-  const tt::AxisInfo *info = axisInfo.getAxisInfo(v);
-  int64_t div = info ? info->getDivisibility(0) : 1;
-  if (div % divisor != 0) {
-    LDBG("Index " << v << " has divisibility " << div << ", need " << divisor);
-    return false;
-  }
-  return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
-}
-
 // Folding a leading index into the base keeps it 4-byte aligned, as every 2D
 // block access needs (see satisfies2DBlockReadAlignment), only if each
 // candidate's stride is a 4-byte multiple (an unknown runtime stride is trusted
@@ -1403,7 +1375,7 @@ private:
     // Analyze the load/store-time index in the stride-one dimension to ensure
     // it satisfies HW constraints.
     Value offset = op.getIndices()[strideOneDimVal];
-    if (!isDescriptorIndexAligned(axisInfoAnalysis, offset, divisor)) {
+    if (!ttgi::isDescriptorIndexAligned(axisInfoAnalysis, offset, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "descriptor index does not satisfy HW constraints: ";
         offset.printAsOperand(llvm::dbgs(), {});
