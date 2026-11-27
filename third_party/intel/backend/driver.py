@@ -22,6 +22,8 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 from . import native
+from .sycl_runtime import (_has_sycl_headers, _links_runtime, _runtime_in, _soname, _sycl_header_version,
+                           _torch_sycl_runtime)
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -35,37 +37,47 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def _find_sycl_from_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the `icpx` on `PATH`: only the compiler knows where its runtime and headers are."""
     include_dir = include_dir.copy()
     icpx_path = shutil.which("icpx")
-    if icpx_path:
-        # only `icpx` compiler knows where sycl runtime binaries and header files are
-        compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
-        sycl_dir = os.path.join(compiler_root, "lib")
-        return include_dir, [sycl_dir]
+    if not icpx_path:
+        return include_dir, []
+    compiler_root = os.path.abspath(f"{icpx_path}/../..")
+    include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+    return include_dir, [os.path.join(compiler_root, "lib")]
 
+
+def _find_sycl_from_oneapi_root(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the compiler under `ONEAPI_ROOT`, if the variable names an install that has one."""
+    include_dir = include_dir.copy()
     oneapi_root = os.getenv("ONEAPI_ROOT")
-    if oneapi_root:
-        # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
-        # installed here (a VTune-only install has no `compiler` directory at all). Check that both
-        # paths exist before returning them.
-        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
-        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
-        sycl_dir = os.path.join(compiler_root, "lib")
-        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
-            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
-            return include_dir, [sycl_dir]
-        if os.path.isdir(compiler_root):
-            # A compiler directory with only half of SYCL in it is not something a normal install
-            # leaves behind, and the SYCL found below may be a different version than the one
-            # meant to be used, so do not skip it silently.
-            warnings.warn(
-                f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
-                "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
-                stacklevel=2,
-            )
+    if not oneapi_root:
+        return include_dir, []
+    # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+    # installed here (a VTune-only install has no `compiler` directory at all). Check that both
+    # paths exist before returning them.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+    compiler_root = os.path.join(oneapi_root, "compiler", "latest")
+    sycl_dir = os.path.join(compiler_root, "lib")
+    if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+        return include_dir, [sycl_dir]
+    if os.path.isdir(compiler_root):
+        # A compiler directory with only half of SYCL in it is not something a normal install
+        # leaves behind, and the SYCL found below may be a different version than the one
+        # meant to be used, so do not skip it silently.
+        warnings.warn(
+            f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
+            "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
+            stacklevel=3,
+        )
+    return include_dir, []
 
+
+def _find_sycl_from_wheel(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the `intel-sycl-rt` wheel, which PyTorch's XPU wheels depend on."""
+    include_dir = include_dir.copy()
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
@@ -80,16 +92,28 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # being add: include and include/sycl.
         if "sycl.hpp" in f.name:
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl.lib"))):
+        # Only the library itself: the wheel also ships `libsycl.so.N-gdb.py` and its `__pycache__`.
+        if re.fullmatch(r"libsycl\.so(\.\d+)*|sycl\.lib", f.name):
             sycl_dir = f.locate().parent.resolve()
             if os.name == "nt":
                 # for sycl8.dll loading on Windows
                 dll_path = sycl_dir.parent.joinpath("bin")
-                sycl_dirs.append(str(dll_path))
-                _ = os.add_dll_directory(str(dll_path))
-            sycl_dirs.append(str(sycl_dir))
+                if str(dll_path) not in sycl_dirs:
+                    sycl_dirs.append(str(dll_path))
+                    _ = os.add_dll_directory(str(dll_path))
+            if str(sycl_dir) not in sycl_dirs:
+                sycl_dirs.append(str(sycl_dir))
 
     return include_dir, sycl_dirs
+
+
+def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The first SYCL found among `icpx` on `PATH`, `ONEAPI_ROOT` and the `intel-sycl-rt` wheel."""
+    for finder in (_find_sycl_from_icpx, _find_sycl_from_oneapi_root, _find_sycl_from_wheel):
+        found_include_dir, sycl_dirs = finder(include_dir)
+        if sycl_dirs:
+            return found_include_dir, sycl_dirs
+    return include_dir.copy(), []
 
 
 def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
@@ -141,7 +165,7 @@ def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
     return include_dir, sycl_dirs
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
     """
     Looks for the sycl library in known places.
 
@@ -149,25 +173,72 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       include_dir: list of include directories to pass to compiler.
 
     Returns:
-      enriched include_dir and libsycl.so location.
+      enriched include_dir, libsycl.so location, and whether a SYCL compiler may build against it.
 
     Raises:
       AssertionError: if library was not found.
     """
 
-    sycl_dirs = []
+    # Every SYCL installation found, in the order they were preferred in before PyTorch's runtime
+    # was taken into account: what it is, its include and library directories, and whether it is a
+    # SYCL compiler's own, which that compiler may then build against.
+    candidates: list[tuple[str, list[str], list[str], bool]] = []
     csycl = knobs.intel.sycl_compiler
     if not csycl or csycl == "icpx":
-        include_dir, sycl_dirs = find_sycl_icpx(include_dir)
-    if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
-        include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
-    if len(sycl_dirs) == 0:
+        finders = [
+            ("icpx", _find_sycl_from_icpx, True),
+            ("ONEAPI_ROOT", _find_sycl_from_oneapi_root, False),
+            ("the intel-sycl-rt wheel", _find_sycl_from_wheel, False),
+        ]
+        for what, finder, is_compiler in finders:
+            found_include_dir, sycl_dirs = finder(include_dir)
+            if sycl_dirs:
+                candidates.append((what, found_include_dir, sycl_dirs, is_compiler))
+    if not candidates and (not csycl or csycl.startswith("dpclang")):
+        found_include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+        if sycl_dirs:
+            candidates.append((csycl or "dpclang++", found_include_dir, sycl_dirs, True))
+    if not candidates:
         raise AssertionError("sycl headers not found, please install `icpx` compiler, "
                              "or provide `ONEAPI_ROOT` environment "
                              "or install `intel-sycl-rt>=2025.0.0` wheel"
                              "or instal `dpclang` compiler (experimental)")
 
-    return include_dir, sycl_dirs
+    # The helpers are handed PyTorch's `sycl::queue`, so they must use the SYCL runtime PyTorch
+    # links: another one, with another ABI, crashes on the first call on the queue. Build against the
+    # installation whose `libsycl.so` has that soname. Of several, take the one with the oldest
+    # headers: a runtime runs code built against older headers of the same soname, never newer ones.
+    # A SYCL compiler adds its own SYCL to the build, so it may only build against its own.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
+    chosen = candidates[0]
+    runtime = _torch_sycl_runtime()
+    if runtime is not None:
+        matching = [
+            candidate for candidate in candidates
+            if _links_runtime(candidate[2], runtime) and _has_sycl_headers(candidate[1])
+        ]
+        if matching:
+            chosen = min(
+                matching, key=lambda candidate:
+                (_sycl_header_version(candidate[1]) is None, _sycl_header_version(candidate[1]) or 0))
+            if csycl and candidates[0][3] and not chosen[3]:
+                warnings.warn(
+                    f"TRITON_INTEL_SYCL_COMPILER={csycl} is not used: Triton builds its helpers against {chosen[0]}, "
+                    f"the SYCL that fits the runtime PyTorch links ({runtime}), and a SYCL compiler builds only "
+                    "against its own SYCL, so the host C++ compiler builds them.",
+                    stacklevel=2,
+                )
+        else:
+            found = ", ".join(f"{what}: {sycl_dirs[0]} links {_runtime_in(sycl_dirs) or 'no libsycl.so'}" +
+                              ("" if _has_sycl_headers(found_include_dir) else " and has no headers")
+                              for what, found_include_dir, sycl_dirs, _ in candidates)
+            warnings.warn(
+                f"PyTorch links the SYCL runtime {runtime}, but no SYCL installation found provides it ({found}). "
+                f"Triton builds its helpers against {chosen[0]}, which crashes if the two runtimes' ABIs differ.",
+                stacklevel=2,
+            )
+    _, include_dir, sycl_dirs, is_compiler = chosen
+    return include_dir, sycl_dirs, is_compiler
 
 
 class CompilationHelper:
@@ -179,6 +250,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
+        self._use_sycl_compiler = None
         self.libraries = ['sycl', 'ze_loader']
 
     @property
@@ -193,7 +265,7 @@ class CompilationHelper:
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
-        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        include_dir, self._libsycl_dir, self._use_sycl_compiler = find_sycl(include_dir)
         if self._libsycl_dir:
             library_dir += self._libsycl_dir
         if os.name == "nt":
@@ -231,6 +303,11 @@ class CompilationHelper:
     def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
+
+    @cached_property
+    def use_sycl_compiler(self) -> bool:
+        self._compute_compilation_options_lazy
+        return self._use_sycl_compiler
 
 
 COMPILATION_HELPER = CompilationHelper()
@@ -465,6 +542,14 @@ def get_hasher_common(eventless_submit: bool = True):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+        # The directory stays when the runtime in it is upgraded in place (`pip install -U`), but the
+        # helper is linked against one soname, so it must be rebuilt then.
+        for sycl_dir in COMPILATION_HELPER.libsycl_dir:
+            hasher.update(str(_soname(os.path.join(sycl_dir, "libsycl.so"))).encode("utf-8"))
+        # Releases of one SYCL major share a soname, and a runtime only runs code built against its
+        # own headers or older ones. So a helper must also be rebuilt when the headers change under
+        # the same directory and soname, e.g. when `intel-sycl-rt` is replaced by an older release.
+        hasher.update(str(_sycl_header_version(COMPILATION_HELPER.include_dir)).encode("utf-8"))
     if eventless_submit:
         hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher
@@ -509,7 +594,8 @@ def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args,
+                        use_sycl_compiler=COMPILATION_HELPER.use_sycl_compiler)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
