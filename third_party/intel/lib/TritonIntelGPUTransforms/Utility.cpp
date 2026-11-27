@@ -632,12 +632,15 @@ LogicalResult getConvertBackwardSlice(
         return failure();
     slice.insert(currentValue);
 
+    // If there is already an existing conversion to the target layout, we don't
+    // need to propagate to the operands. This is per-use rather than per-value,
+    // so if another use fails the check, we may still traverse the operands.
     Value existing;
     if (getExistingConversion &&
         (existing = getExistingConversion(*currentValueUse, encoding))) {
       if (failed(updateLayout(existing, encoding)))
         return failure();
-      currentValue = existing;
+      continue;
     }
     if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
       if (stopPropagation && stopPropagation(forOp))
