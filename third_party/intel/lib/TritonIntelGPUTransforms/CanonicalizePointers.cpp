@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: third_party/amd/lib/TritonAMDGPUTransforms/CanonicalizePointers.cpp
+// copied-from-sha256: 775f613e29759d472c435476aae50c791b5023c22a7751eccace3a981c8c4155
+// clang-format on
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"

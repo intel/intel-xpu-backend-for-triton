@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Conversion/TritonGPUToLLVM/ReduceOpToLLVM.cpp
+// copied-from-sha256: 2ce3c63b5f9592da135570382620ffdc7894dc64121d6885c498252f0b9bdb7f
+// clang-format on
 #include "Utility.h"
 #include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 

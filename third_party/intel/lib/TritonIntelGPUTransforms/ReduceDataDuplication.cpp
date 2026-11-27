@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Dialect/TritonGPU/Transforms/ReduceDataDuplication.cpp
+// copied-from-sha256: ec225b19c5fe0b6394b55276c11c9784439aa9d7b93b5df8683e3046d65c37ca
+// clang-format on
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"

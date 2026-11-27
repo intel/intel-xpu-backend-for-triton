@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Conversion/TritonGPUToLLVM/PrintOpToLLVM.cpp
+// copied-from-sha256: ea82189f2858a2c9db418561a94b79f5c1b76daafa997ad7a9a8d4e54b17aeff
+// clang-format on
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"

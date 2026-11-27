@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Conversion/TritonGPUToLLVM/HistogramOpToLLVM.cpp
+// copied-from-sha256: a63fee79b52d86ad6757482590898f85741094d331c7c8950f5cd89fef65f8de
+// clang-format on
 #include "PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;

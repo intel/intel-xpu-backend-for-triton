@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: third_party/amd/lib/Analysis/RangeAnalysis.cpp
+// copied-from-sha256: e9702d39ec6cd95d61c2abcaa348737554fd822aa4e715f873f04d217bc6d732
+// clang-format on
 #include "third_party/intel/include/Analysis/Range.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"

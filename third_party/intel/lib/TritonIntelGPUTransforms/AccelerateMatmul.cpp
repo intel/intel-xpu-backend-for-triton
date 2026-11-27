@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp
+// copied-from-sha256: ed1e79d1b32b688807f62189319ef3fe0ff03005968e7748f90426a5f38bee67
+// clang-format on
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
