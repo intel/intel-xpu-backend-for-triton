@@ -1,7 +1,9 @@
+import gc
 import io
 import re
 import shutil
 import sys
+import weakref
 
 import pytest
 import torch
@@ -429,7 +431,7 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
                                             device)
 
 
-def test_load_binary_does_not_leak_kernel_capsule(device):
+def test_load_binary_does_not_leak_module(device):
 
     @triton.jit
     def _kernel(x_ptr):
@@ -439,7 +441,6 @@ def test_load_binary_does_not_leak_kernel_capsule(device):
     kernel = _kernel[(1, )](x)
 
     module = kernel.module
-    function = kernel.function
 
     # An object held by exactly one name, so the comparison does not depend on
     # whether `getrefcount` counts its own argument reference.
@@ -448,8 +449,57 @@ def test_load_binary_does_not_leak_kernel_capsule(device):
 
     assert sys.getrefcount(module) == baseline + 1, \
         "kernel.module capsule has a reference beyond the attribute and this local -- it leaked"
-    assert sys.getrefcount(function) == baseline + 1, \
-        "kernel.function capsule has a reference beyond the attribute and this local -- it leaked"
+
+
+@triton.jit
+def _add_one(x_ptr):
+    tl.store(x_ptr, tl.load(x_ptr) + 1)
+
+
+def _loaded(fn, device):
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = fn.warmup(x, grid=(1, ))
+    kernel._init_handles()
+    stream = driver.active.get_current_stream(driver.active.get_current_device())
+    return kernel, x, stream
+
+
+def test_kernel_handle_is_int(device):
+    kernel, _, _ = _loaded(_add_one, device)
+    assert type(kernel.function) is int and kernel.function != 0
+
+
+@pytest.mark.parametrize("handle, error, message", [(0, ValueError, "null kernel handle"), (None, TypeError, None)])
+def test_launch_rejects_bad_kernel_handle(device, handle, error, message):
+    kernel, x, stream = _loaded(_add_one, device)
+    signature = kernel.run.kernel_signature
+    refs = sys.getrefcount(signature)
+    entered = []
+    with pytest.raises(error, match=message):
+        kernel.run(1, 1, 1, stream, handle, kernel.packed_metadata, None, entered.append, None, x)
+    assert not entered, "the launch enter hook ran for a bad kernel handle"
+    assert sys.getrefcount(signature) == refs, "the rejected launch kept a reference to the kernel signature"
+    assert x.item() == 0
+
+
+def test_kernel_handle_valid_while_module_alive(device):
+
+    # Not `_add_one`: a failed test's traceback that holds its kernel would keep it alive.
+    @triton.jit
+    def _kernel(x_ptr):
+        tl.store(x_ptr, tl.load(x_ptr) + 1)
+
+    kernel, x, stream = _loaded(_kernel, device)
+    run, function, metadata = kernel.run, kernel.function, kernel.packed_metadata
+    module = kernel.module  # owns the kernel: `function` is valid only while it is alive
+    kernel_ref = weakref.ref(kernel)
+    _kernel.device_caches.clear()
+    del kernel
+    gc.collect()
+    assert kernel_ref() is None, "the CompiledKernel is still alive"
+    run(1, 1, 1, stream, function, metadata, None, None, None, x)
+    assert x.item() == 1
+    del module
 
 
 def test_wait_on_sycl_queue_error(device):

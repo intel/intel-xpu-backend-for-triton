@@ -150,7 +150,8 @@ def _launch_loop(arg_type: str, num_args: int, level: str, device) -> Callable[[
         stream = driver.active.get_current_stream(driver.active.get_current_device())
         run, function, metadata = compiled.run, compiled.function, compiled.packed_metadata
 
-        def launcher_loop(n: int):
+        # `function` is valid only while `compiled` (its module) is alive, so the loop holds it.
+        def launcher_loop(n: int, _owner=compiled):
             # Same call as in JITFunction.run, without launch metadata and hooks.
             for _ in range(n):
                 run(1, 1, 1, stream, function, metadata, None, None, None, *args)

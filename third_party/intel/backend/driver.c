@@ -335,17 +335,21 @@ struct KernelInfo {
   uint32_t kernel_num_args;
 };
 
-void freeKernel(PyObject *p) {
-  KernelInfo *info =
-      reinterpret_cast<KernelInfo *>(PyCapsule_GetPointer(p, "kernel"));
-  delete info->kernel;
-  delete info;
-}
+// `CompiledKernel.module` owns the bundle and the kernel.
+// `CompiledKernel.function` is the kernel as an integer (KernelInfo*), like a
+// CUfunction, and is valid only while its module is alive.
+struct ModuleInfo {
+  sycl::kernel_bundle<sycl::bundle_state::executable> *bundle;
+  KernelInfo *kernel;
+};
 
-void freeKernelBundle(PyObject *p) {
-  delete reinterpret_cast<
-      sycl::kernel_bundle<sycl::bundle_state::executable> *>(
-      PyCapsule_GetPointer(p, "kernel_bundle"));
+void freeModule(PyObject *p) {
+  ModuleInfo *m = reinterpret_cast<ModuleInfo *>(
+      PyCapsule_GetPointer(p, "triton_xpu_module"));
+  delete m->kernel->kernel;
+  delete m->kernel;
+  delete m->bundle;
+  delete m;
 }
 
 // Scratch/spill accounting for one compiled kernel.
@@ -829,12 +833,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       fun->get_info<sycl::info::kernel::num_args>();
   KernelInfo *kernel_info = new KernelInfo{fun, kernel_num_args};
 
-  auto kernel_py = PyCapsule_New(reinterpret_cast<void *>(kernel_info),
-                                 "kernel", freeKernel);
-  auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
-                                        "kernel_bundle", freeKernelBundle);
+  auto kernel_py = PyLong_FromVoidPtr(reinterpret_cast<void *>(kernel_info));
+  auto module_py =
+      PyCapsule_New(reinterpret_cast<void *>(new ModuleInfo{mod, kernel_info}),
+                    "triton_xpu_module", freeModule);
   last_build_flag = build_flags;
-  return Py_BuildValue("(NNiii)", kernel_bundle_py, kernel_py, n_regs,
+  return Py_BuildValue("(NNiii)", module_py, kernel_py, n_regs,
                        spillsToPyInt(n_spills.slotsPerLane()), n_max_threads);
 }
 
@@ -1556,6 +1560,16 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
     return NULL;
   }
 
+  // Before the enter hook, so that a bad handle runs no hook.
+  KernelInfo *kernel_info =
+      reinterpret_cast<KernelInfo *>(PyLong_AsVoidPtr(py_kernel));
+  if (kernel_info == nullptr) {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError, "null kernel handle");
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
   // extract kernel metadata
   PyObject *num_warps_attr = PyObject_GetAttr(kernel_metadata, num_warps_str);
   int num_warps = PyLong_AsLong(num_warps_attr);
@@ -1661,10 +1675,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
     PyBuffer_Release(&signature);
     return NULL;
   }
-  KernelInfo *kernel_info =
-      reinterpret_cast<KernelInfo *>(PyCapsule_GetPointer(py_kernel, "kernel"));
-  if (kernel_info == nullptr)
-    return NULL;
 
   // A rejected submit throws `sycl::exception` on this thread. It must not
   // unwind out of the ctypes entry point, where it would reach
