@@ -128,3 +128,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<256xbf16, #b16>
   }
 }
+
+// -----
+
+// Native bf16 arithmetic on IGC >= 2.43: bf16 -> f32 is a plain fpext.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.support_bfloat16_arithmetic", "ttig.use_bf16_fpext", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_fpext(
+  // CHECK-NOT:     ConvertBF16ToFINTEL
+  // CHECK-COUNT-8: llvm.fpext %{{.*}} : bf16 to f32
+  // CHECK-NOT:     ConvertBF16ToFINTEL
+  // CHECK:         llvm.return
+  tt.func @extf_fpext(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
+  }
+}
+
+// -----
+
+// Native bf16 arithmetic on IGC < 2.43: bf16 -> f32 uses the builtin.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.support_bfloat16_arithmetic", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_old_igc(
+  // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
+  // CHECK-NOT:     llvm.fpext
+  // CHECK:         llvm.return
+  tt.func @extf_old_igc(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
+  }
+}
+
+// -----
+
+// No native bf16 arithmetic (LTS): bf16 -> f32 uses the builtin, even with
+// `ttig.use_bf16_fpext`, which an AOT compile takes from the `ocloc` version.
+#b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttig.use_bf16_fpext", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @extf_lts(
+  // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
+  // CHECK-NOT:     llvm.fpext
+  // CHECK:         llvm.return
+  tt.func @extf_lts(%arg0: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
+    %0 = arith.extf %arg0 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
+    tt.return %0 : tensor<128xf32, #b8>
+  }
+}

@@ -17,7 +17,7 @@ from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel import compiler as intel_compiler
-from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
+from triton.backends.intel.driver import find_sycl_icpx, has_bf16_fpext, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -282,6 +282,19 @@ def test_has_spirv_2d_block_io(version, expected):
     assert has_spirv_2d_block_io(version) is expected
 
 
+@pytest.mark.parametrize("version, expected", [
+    ("1.18.40196+8", False),  # compute-runtime 26.40.40196.8 (IGC 2.42.6), drops the abs of an fpext
+    ("1.18.40627", True),  # IGC 2.43.9, first verified
+    ("26.43.40627.1", True),  # an `ocloc` version
+    ("1.6.35096+9", False),  # LTS
+    ("garbage", False),  # unknown: keep the builtin
+    ("", False),
+    (None, False),
+])
+def test_has_bf16_fpext(version, expected):
+    assert has_bf16_fpext(version) is expected
+
+
 def _target_with_driver_version(version):
     target = driver.active.get_current_target()
     return GPUTarget(target.backend, {**target.arch, "driver_version": version}, target.warp_size)
@@ -310,6 +323,29 @@ def test_2d_block_io_lowering_follows_driver_version(device, fresh_knobs, versio
         assert genisa_loads > 0 and spirv_loads == 0
     else:
         assert spirv_loads > 0 and genisa_loads == 0
+
+
+@pytest.mark.parametrize("version, uses_fpext", [("1.18.40196+8", False),  # compute-runtime 26.40.40196.8 (IGC 2.42.6)
+                                                 ("1.18.40627", True),  # IGC 2.43.9
+                                                 ])
+def test_bf16_upcast_lowering_follows_driver_version(device, fresh_knobs, version, uses_fpext):
+    """bf16 -> f32 lowers to `fpext` only for a driver with IGC >= 2.43."""
+    fresh_knobs.intel.gen_native_code = False
+
+    @triton.jit
+    def _kernel(in_ptr, out_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, tl.load(in_ptr + offs).to(tl.float32))
+
+    src = triton.compiler.ASTSource(_kernel, signature={"in_ptr": "*bf16", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+                                    constexprs={"BLOCK": 128})
+    llir = triton.compile(src, target=_target_with_driver_version(version)).asm["llir"]
+    fpexts = llir.count("fpext bfloat")
+    builtins = llir.count("ConvertBF16ToFINTEL")
+    if uses_fpext:
+        assert fpexts > 0 and builtins == 0
+    else:
+        assert builtins > 0 and fpexts == 0
 
 
 @pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [
