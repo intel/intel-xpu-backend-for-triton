@@ -5733,12 +5733,11 @@ static LogicalResult lowerBlockLoad2D(
       mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                       /*upperBound=*/nullptr));
 
-  // A stride=0 (broadcast-row) load reads only row 0 of a 1-row surface, so
-  // messages that differ only in their row read the same data. Group them by
-  // their static offsets along the other dimensions and issue one 2D block
-  // load per group instead of one per message. A tile height of 1 is not a
-  // broadcast: a non-broadcast load whose messages are single rows also gets
-  // base_height 1, and each of its messages reads a different row.
+  // Messages that read the same data share one 2D block load: those at equal
+  // static offsets, which register replication produces, and, for a stride=0
+  // (broadcast-row) load of a 1-row surface, those that differ only in row. A
+  // tile height of 1 is not a broadcast: a non-broadcast load of single-row
+  // messages also gets base_height 1, and each message reads a different row.
   bool broadcastRows =
       staticBaseHeight && *staticBaseHeight == 1 && cfg.tileHeight > 1;
   // A broadcast row has a zero row stride, so its memory is row major
@@ -5749,18 +5748,23 @@ static LogicalResult lowerBlockLoad2D(
   for (size_t elemIdx = 0; elemIdx < cfg.numElems;
        elemIdx += cfg.numElemsPerLoad)
     msgElemIdxs.push_back(elemIdx);
-  // groupOf[i] is the index of the first message of message i's group.
+  // groupOf[i] is the index of the first message of message i's group, and
+  // exactLeader[i] that of the first one at the same offsets in every dim.
   SmallVector<size_t> groupOf(msgElemIdxs.size());
+  SmallVector<size_t> exactLeader(msgElemIdxs.size());
   {
-    std::map<SmallVector<int32_t>, size_t> firstMsgOfKey;
+    std::map<SmallVector<int32_t>, size_t> firstMsgAtOffsets, firstMsgOfKey;
     for (auto [i, elemIdx] : llvm::enumerate(msgElemIdxs)) {
-      groupOf[i] = i;
-      if (!broadcastRows)
-        continue;
       unsigned registerIdx =
           cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
       auto staticOffsets = llEncoding.apply(
           {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+      SmallVector<int32_t> offsets =
+          llvm::to_vector(llvm::make_second_range(staticOffsets));
+      exactLeader[i] = firstMsgAtOffsets.try_emplace(offsets, i).first->second;
+      groupOf[i] = exactLeader[i];
+      if (!broadcastRows)
+        continue;
       SmallVector<int32_t> key;
       for (auto [dim, offset] : llvm::enumerate(staticOffsets))
         if (static_cast<int>(dim) != cfg.rowDim)
@@ -5790,13 +5794,14 @@ static LogicalResult lowerBlockLoad2D(
   SmallVector<SubTileAddress> addrs(msgElemIdxs.size());
   if (anyShared)
     for (auto [i, elemIdx] : llvm::enumerate(msgElemIdxs))
-      addrs[i] = addressOf(elemIdx);
+      addrs[i] =
+          exactLeader[i] == i ? addressOf(elemIdx) : addrs[exactLeader[i]];
   // A shared load reads when any member's predicate holds, so it reads no
   // address the per-message loads would not; each member then applies its
   // own predicate when it is unpacked.
   SmallVector<Value> groupPred(msgElemIdxs.size());
   for (auto [i, g] : llvm::enumerate(groupOf)) {
-    if (groupSize[g] < 2)
+    if (groupSize[g] < 2 || exactLeader[i] != i)
       continue;
     if (static_cast<size_t>(g) == i) {
       groupPred[g] = addrs[i].pred;
@@ -5807,20 +5812,22 @@ static LogicalResult lowerBlockLoad2D(
     }
   }
 
-  // A shared load may have read for another member: a member with a predicate
+  // A broadcast load may have read for another row: a member with a predicate
   // and no `other` zero-fills explicitly instead of relying on the hardware's
   // out-of-bounds fill. `otherElems` is empty for `other = None` and for a
   // zero `other` (isZeroFillConst drops it), so those loads always take this.
+  // Other shared loads read under each member's own predicate and need no fill.
   SmallVector<Value> zeroElems;
-  if (anyShared && otherElems.empty()) {
+  if (anyShared && broadcastRows && otherElems.empty()) {
     Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
     zeroElems.assign(cfg.numElems,
                      LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                               rewriter.getZeroAttr(elemTy)));
   }
   auto memberOtherOf = [&](const SubTileAddress &addr) -> ArrayRef<Value> {
-    return addr.pred && otherElems.empty() ? ArrayRef<Value>(zeroElems)
-                                           : otherElems;
+    return broadcastRows && addr.pred && otherElems.empty()
+               ? ArrayRef<Value>(zeroElems)
+               : otherElems;
   };
 
   SmallVector<Value> unpackedLoadedVals(cfg.numElems);
