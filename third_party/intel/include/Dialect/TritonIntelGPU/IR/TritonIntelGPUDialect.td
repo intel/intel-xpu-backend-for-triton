@@ -224,6 +224,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.chained_dot_kind";
     }
 
+    /// Get the name of the module attribute AccelerateMatmul sets when a chain
+    /// of dots along A would move warps from M to N, but was not asked to.
+    static constexpr llvm::StringRef getChainedDotSplitCandidateAttrName() {
+      return "ttig.chained_dot_split_candidate";
+    }
+
     /// Get the name of the attribute used to propagate the padding option
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {
