@@ -90,6 +90,8 @@ jobs:
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
           upload_artifact: pytorch-sglang-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
+          # Only this run installs it, 7 days still covers re-runs
+          upload_retention_days: 7
 
       - name: Build Triton wheel
         run: |
