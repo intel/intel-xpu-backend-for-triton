@@ -12,7 +12,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.mlir.constant(2.000000e+00 : f32) : f32
   // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%{{.*}} : f32)
   // CHECK: ^[[READ]]:
-  // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
+  // CHECK: %[[C0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[BCAST:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%{{.*}}, %[[C0]])
+  // CHECK: %[[ADDR:.*]] = llvm.inttoptr %[[BCAST]] : i64 to !llvm.ptr<1>
+  // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %[[ADDR]] {{.*}}: !llvm.ptr<1> -> i32
   // CHECK: %[[VAL:.*]] = llvm.bitcast %[[WORD]] : i32 to f32
   // CHECK: llvm.br ^[[END]](%[[VAL]] : f32)
   // DISABLED-LABEL: @row(
