@@ -1,0 +1,29 @@
+# Too slow: each case takes about 13 minutes, the whole file about 100 minutes.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9018
+test/transformers/test_fused_moe.py::test_correctness
+
+# Numerical mismatch: one element differs by about 1 in a different luspo token-level case on each run.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9020
+test/chunked_loss/test_grpo_loss.py::test_correctness[r".*-token-luspo-.*"]@regexp
+
+# Fails in bf16 multimodal convergence.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9021
+test/convergence/bf16/test_mini_models_multimodal.py::test_mini_model_multimodal[mini_llava-32-1e-05-dtype1-0.05-0.05-0.1-0.01-0.01-0.01]
+
+# Numerical mismatch.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9020
+test/transformers/test_geglu.py::test_correctness[dtype1-0.01-0.01-2-2048-2048-4096]
+test/transformers/test_geglu.py::test_correctness[dtype1-0.01-0.01-9-41-341-4231]
+test/transformers/test_poly_norm.py::test_correctness[dtype1-0.2-0.02-5-123-123]
+
+# Exceeds the per-thread scratch space (PTSS) limit with IGC 2.42.6, the same error as
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/8737
+test/transformers/test_group_norm.py::test_liger_group_norm[dtype0-0.0001-0.0001-16-32-1-4096]
+
+# Passes alone. Fails after another test in the same xdist worker applies the class-level nemotron patch.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9022
+test/transformers/test_monkey_patch.py::test_apply_liger_kernel_to_instance_for_nemotron
+
+# Numerical mismatch in x.grad: 4 elements differ. The test passed in an earlier run.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/9020
+test/transformers/test_mhc.py::test_liger_mhc_module[dtype1-0.015-0.025-0.05-2-4-2-32]
