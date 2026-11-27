@@ -420,7 +420,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
         igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
         options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
-        options.has_dp4a_operand_order_fix = has_dp4a_operand_order_fix(igc_version)
+        # No fallback to the driver's version here: an unknown `ocloc` version keeps the dp4a lowering.
+        dp4a_ver = get_ocloc_version() if native else self.target.arch.get("driver_version")
+        options.has_dp4a_operand_order_fix = has_dp4a_operand_order_fix(dp4a_ver)
         return options
 
     @staticmethod

@@ -378,6 +378,7 @@ def test_has_spirv_2d_block_io_option_source(device, monkeypatch, fresh_knobs, n
 @pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [
     (True, "26.35.39758.10", "1.17.40196+8", False),  # AOT: `ocloc`'s IGC 2.41.5 consumes the SPIR-V
     (False, "26.35.39758.10", "1.17.40196+8", True),  # JIT: the driver's IGC 2.42.6 does
+    (True, None, "1.17.40196+8", False),  # no usable `ocloc`: keep the dp4a lowering, no fallback to the driver
 ])
 def test_has_dp4a_operand_order_fix_option_source(device, monkeypatch, fresh_knobs, native, ocloc_version,
                                                   driver_version, expected):
