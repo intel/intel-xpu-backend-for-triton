@@ -213,6 +213,66 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
         assert load_count > 0 or transpose
 
 
+# Row bound 60 has constancy 4, which clamps the operand-C tile to 4 rows (#8895).
+@pytest.mark.parametrize("dtype_str", ["float16", "int8"])
+@pytest.mark.parametrize("layout",
+                         [DpasLayout(8, 8, 16, 1, 16, [1, 4], [1, 2]),
+                          DpasLayout(8, 8, 16, 1, 32, [4, 1], [2, 2])])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
+def test_block_io_masked_dpas_c(dtype_str, layout, device, tmp_path: pathlib.Path):
+    M, N, bound = 64, 64, 60
+    ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
+    zero = "0.000000e+00" if ty.startswith("f") else "0"
+    s0, s1 = "#ttg.slice<{dim = 0, parent = #layout}>", "#ttg.slice<{dim = 1, parent = #layout}>"
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
+    ir = f"""
+    #layout = {layout}
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {int(np.prod(warps_per_cta(layout)))} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {int(np.prod(layout.threads_per_warp))} : i32}} {{
+        tt.func public @k(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
+            %stride_N = arith.constant dense<{N}> : tensor<{M}x1xi32, #layout>
+            %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, {s1}>
+            %2 = tt.expand_dims %1 {{axis = 1 : i32}} : tensor<{M}xi32, {s1}> -> tensor<{M}x1xi32, #layout>
+            %row_stride = arith.muli %2, %stride_N : tensor<{M}x1xi32, #layout>
+            %4 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, {s0}>
+            %5 = tt.expand_dims %4 {{axis = 0 : i32}} : tensor<{N}xi32, {s0}> -> tensor<1x{N}xi32, #layout>
+            %6 = tt.broadcast %row_stride : tensor<{M}x1xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %7 = tt.broadcast %5 : tensor<1x{N}xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %off = arith.addi %6, %7 : tensor<{M}x{N}xi32, #layout>
+            %bnd = arith.constant dense<{bound}> : tensor<{M}xi32, {s1}>
+            %m1 = arith.cmpi slt, %1, %bnd : tensor<{M}xi32, {s1}>
+            %m2 = tt.expand_dims %m1 {{axis = 1 : i32}} : tensor<{M}xi1, {s1}> -> tensor<{M}x1xi1, #layout>
+            %mask = tt.broadcast %m2 : tensor<{M}x1xi1, #layout> -> tensor<{M}x{N}xi1, #layout>
+            %other = arith.constant dense<{zero}> : tensor<{M}x{N}x{ty}, #layout>
+            %sb = tt.splat %src : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %sp = tt.addptr %sb, %off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            %v = tt.load %sp, %mask, %other {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %db = tt.splat %dst : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %dp = tt.addptr %db, %off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            tt.store %dp, %v {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.randn((M, N), dtype=torch_dtype, device=device)
+    else:
+        a = torch.randint(low=-127, high=128, size=(M, N), dtype=torch_dtype, device=device)
+    x = torch.empty_like(a)
+    temp_file = tmp_path / "test_block_io_masked_dpas_c.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(x, torch.where(torch.arange(M, device=device)[:, None] < bound, a, torch.zeros_like(a)))
+    if support_block_io and not is_compile_warmup():
+        llir = kernel.asm["llir"]
+        assert 'spirv_Subgroup2DBlockLoad' in llir or 'GenISA.LSC2DBlockRead' in llir
+
+
 # The 2D block I/O tile covers only the inner two dimensions, so every leading
 # dimension needs its own stride from the tensor descriptor. Re-deriving it from the
 # 2D surface parameters steps a leading dimension by the wrong amount whenever its

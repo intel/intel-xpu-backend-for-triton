@@ -1239,7 +1239,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       if (cfg.numElemsPerLoad >= elemsPerLanePerDPASInst) {
         static const bool multipleCPerLoad = triton::tools::getBoolEnv(
             "TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD");
-        if (!isTransposeRequired && !multipleCPerLoad) {
+        // Use the C instruction shape only when the clamped tile holds it.
+        if (!isTransposeRequired && !multipleCPerLoad && numDPASOperands) {
           assert(numPackedVals == 1 &&
                  "invalid numPackedVals for DPAS C operand");
           cfg.tileHeight = dpasLayout.getDPASInstShapeC()[0];
