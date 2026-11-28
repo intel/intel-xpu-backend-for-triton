@@ -104,8 +104,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// COM: The i8 extension can stay ahead of the shared-memory round trip (a dot
-// COM: without a loaded accumulator): the dot still lowers to dp4a.
+// COM: The i8 extension can stay ahead of the shared-memory round trip, as in
+// COM: an INT8 FMA dot from a Triton kernel: through an immutable local_alloc,
+// COM: the dot still lowers to dp4a.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
