@@ -64,6 +64,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is
     %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
     %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
     tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    // CHECK-NOT: dp4a
+    // CHECK: llvm.return
     tt.return
   }
 }
@@ -94,6 +96,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
     %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
     tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    // CHECK-NOT: dp4a
+    // CHECK: llvm.return
     tt.return
   }
 }
