@@ -51,7 +51,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     }
 
     if (isa<BlockedEncodingAttr>(DTensorTy.getEncoding())) {
-      // FIXME: Drop once every supported driver has IGC 2.42+ (#7854).
+      // FIXME: Drop once every supported driver has IGC 2.42+ (#7854, #9038).
       // Where IGC predates 2.42 (the LTS driver, and rolling drivers before
       // compute-runtime 26.40.40196), lower integer dots to dp4a rather than
       // to a mul/add chain: that IGC folds such a chain back into a dp4a and
