@@ -64,14 +64,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is
     %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
     %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
     tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    // CHECK-NOT: dp4a
+    // CHECK: llvm.return
     tt.return
   }
 }
 
 // -----
 
-// COM: Rolling IGC (2.42+) fixes the dp4a fold, so without `ttig.is_lts` an
-// COM: INT8 dot keeps the generic mul/add chain.
+// COM: IGC 2.42+ fixes the dp4a fold, so without `ttig.is_lts` or
+// COM: `ttig.use_dp4a_integer_fma` an INT8 dot keeps the generic mul/add chain.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -91,6 +93,147 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %b_i32 = arith.extsi %b_mat : tensor<16x32xi8, #dot_operand_b> to tensor<16x32xi32, #dot_operand_b>
     // CHECK: llvm.mul
     %d = tt.dot %a_i32, %b_i32, %cst : tensor<32x16xi32, #dot_operand_a> * tensor<16x32xi32, #dot_operand_b> -> tensor<32x32xi32, #blocked>
+    %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
+    %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    // CHECK-NOT: dp4a
+    // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A rolling driver older than compute-runtime 26.40.40196 (IGC < 2.42)
+// COM: sets `ttig.use_dp4a_integer_fma` without `ttig.is_lts`: the INT8 dot is
+// COM: lowered to dp4a as on LTS. With K = 4 and one element per thread, the
+// COM: stored value is the result of a single dp4a.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.use_dp4a_integer_fma"} {
+  // CHECK-LABEL: matmul_int8_fmadot_rolling_before_igc_2_42
+  // CHECK: %[[D:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.dp4a.ss.i32
+  // CHECK: %[[S:.*]] = llvm.insertvalue %[[D]], %{{.*}}[0] : !llvm.struct<(i32)>
+  // CHECK: %[[E:.*]] = llvm.extractvalue %[[S]][0] : !llvm.struct<(i32)>
+  // CHECK: %[[C:.*]] = llvm.bitcast %[[E]] : i32 to i32
+  // CHECK: %[[V:.*]] = llvm.insertelement %[[C]], %{{.*}}[%{{.*}} : i32] : vector<1xi32>
+  // CHECK: %[[W:.*]] = llvm.bitcast %[[V]] : vector<1xi32> to i32
+  // CHECK: llvm.store %[[W]], %{{.*}} : i32, !llvm.ptr<1>
+  tt.func @matmul_int8_fmadot_rolling_before_igc_2_42(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+                                                      %a: !ttg.memdesc<8x4xi8, #shared, #smem>,
+                                                      %b: !ttg.memdesc<4x16xi8, #shared, #smem>) {
+    %cst = arith.constant dense<0> : tensor<8x16xi32, #blocked>
+    %a_mat = ttg.local_load %a : !ttg.memdesc<8x4xi8, #shared, #smem> -> tensor<8x4xi8, #dot_operand_a>
+    %b_mat = ttg.local_load %b : !ttg.memdesc<4x16xi8, #shared, #smem> -> tensor<4x16xi8, #dot_operand_b>
+    %a_i32 = arith.extsi %a_mat : tensor<8x4xi8, #dot_operand_a> to tensor<8x4xi32, #dot_operand_a>
+    %b_i32 = arith.extsi %b_mat : tensor<4x16xi8, #dot_operand_b> to tensor<4x16xi32, #dot_operand_b>
+    %d = tt.dot %a_i32, %b_i32, %cst : tensor<8x4xi32, #dot_operand_a> * tensor<4x16xi32, #dot_operand_b> -> tensor<8x16xi32, #blocked>
+    %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<8x1x!tt.ptr<i32>, #blocked>
+    %36 = tt.broadcast %30 : tensor<8x1x!tt.ptr<i32>, #blocked> -> tensor<8x16x!tt.ptr<i32>, #blocked>
+    tt.store %36, %d : tensor<8x16x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The i8 extension can stay ahead of the shared-memory round trip, as in
+// COM: an INT8 FMA dot from a Triton kernel: through an immutable local_alloc,
+// COM: the dot still lowers to dp4a.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is_lts"} {
+  // CHECK-LABEL: matmul_int8_fmadot_extended_before_local_alloc
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.dp4a.ss.i32
+  tt.func @matmul_int8_fmadot_extended_before_local_alloc(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+                                                          %a: tensor<32x16xi8, #blocked>,
+                                                          %b: tensor<16x32xi8, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    %a_i32 = arith.extsi %a : tensor<32x16xi8, #blocked> to tensor<32x16xi32, #blocked>
+    %b_i32 = arith.extsi %b : tensor<16x32xi8, #blocked> to tensor<16x32xi32, #blocked>
+    %a_smem = ttg.local_alloc %a_i32 : (tensor<32x16xi32, #blocked>) -> !ttg.memdesc<32x16xi32, #shared, #smem>
+    %b_smem = ttg.local_alloc %b_i32 : (tensor<16x32xi32, #blocked>) -> !ttg.memdesc<16x32xi32, #shared, #smem>
+    %a_mat = ttg.local_load %a_smem : !ttg.memdesc<32x16xi32, #shared, #smem> -> tensor<32x16xi32, #dot_operand_a>
+    %b_mat = ttg.local_load %b_smem : !ttg.memdesc<16x32xi32, #shared, #smem> -> tensor<16x32xi32, #dot_operand_b>
+    %d = tt.dot %a_mat, %b_mat, %cst : tensor<32x16xi32, #dot_operand_a> * tensor<16x32xi32, #dot_operand_b> -> tensor<32x32xi32, #blocked>
+    %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
+    %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A mutable buffer can be written after its initialization, so the loaded
+// COM: value is not the initial extension and the dot keeps the mul/add chain.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is_lts"} {
+  // CHECK-LABEL: matmul_int8_fmadot_mutable_alloc
+  // CHECK-NOT: dp4a
+  // CHECK: llvm.mul
+  // CHECK-NOT: dp4a
+  // CHECK: llvm.return
+  tt.func @matmul_int8_fmadot_mutable_alloc(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+                                            %a: tensor<32x16xi8, #blocked>,
+                                            %b: tensor<16x32xi8, #blocked>,
+                                            %a_new: tensor<32x16xi32, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    %a_i32 = arith.extsi %a : tensor<32x16xi8, #blocked> to tensor<32x16xi32, #blocked>
+    %b_i32 = arith.extsi %b : tensor<16x32xi8, #blocked> to tensor<16x32xi32, #blocked>
+    %a_smem = ttg.local_alloc %a_i32 : (tensor<32x16xi32, #blocked>) -> !ttg.memdesc<32x16xi32, #shared, #smem, mutable>
+    %b_smem = ttg.local_alloc %b_i32 : (tensor<16x32xi32, #blocked>) -> !ttg.memdesc<16x32xi32, #shared, #smem>
+    ttg.local_store %a_new, %a_smem : tensor<32x16xi32, #blocked> -> !ttg.memdesc<32x16xi32, #shared, #smem, mutable>
+    %a_mat = ttg.local_load %a_smem : !ttg.memdesc<32x16xi32, #shared, #smem, mutable> -> tensor<32x16xi32, #dot_operand_a>
+    %b_mat = ttg.local_load %b_smem : !ttg.memdesc<16x32xi32, #shared, #smem> -> tensor<16x32xi32, #dot_operand_b>
+    %d = tt.dot %a_mat, %b_mat, %cst : tensor<32x16xi32, #dot_operand_a> * tensor<16x32xi32, #dot_operand_b> -> tensor<32x32xi32, #blocked>
+    %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
+    %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: An uninitialized buffer only holds what is stored into it, so the dot
+// COM: keeps the mul/add chain.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is_lts"} {
+  // CHECK-LABEL: matmul_int8_fmadot_uninitialized_alloc
+  // CHECK-NOT: dp4a
+  // CHECK: llvm.mul
+  // CHECK-NOT: dp4a
+  // CHECK: llvm.return
+  tt.func @matmul_int8_fmadot_uninitialized_alloc(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+                                                  %b: tensor<16x32xi8, #blocked>,
+                                                  %a_new: tensor<32x16xi32, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    %b_i32 = arith.extsi %b : tensor<16x32xi8, #blocked> to tensor<16x32xi32, #blocked>
+    %a_smem = ttg.local_alloc : () -> !ttg.memdesc<32x16xi32, #shared, #smem, mutable>
+    %b_smem = ttg.local_alloc %b_i32 : (tensor<16x32xi32, #blocked>) -> !ttg.memdesc<16x32xi32, #shared, #smem>
+    ttg.local_store %a_new, %a_smem : tensor<32x16xi32, #blocked> -> !ttg.memdesc<32x16xi32, #shared, #smem, mutable>
+    %a_mat = ttg.local_load %a_smem : !ttg.memdesc<32x16xi32, #shared, #smem, mutable> -> tensor<32x16xi32, #dot_operand_a>
+    %b_mat = ttg.local_load %b_smem : !ttg.memdesc<16x32xi32, #shared, #smem> -> tensor<16x32xi32, #dot_operand_b>
+    %d = tt.dot %a_mat, %b_mat, %cst : tensor<32x16xi32, #dot_operand_a> * tensor<16x32xi32, #dot_operand_b> -> tensor<32x32xi32, #blocked>
     %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
     %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
     tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
